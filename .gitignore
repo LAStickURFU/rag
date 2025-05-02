@@ -172,3 +172,65 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Model files and data
+models/
+*.bin
+*.pt
+*.pth
+*.onnx
+*.safetensors
+
+# Vector stores and embeddings
+*.faiss
+*.index
+vector_store/
+embeddings/
+
+# Logs and databases
+*.log
+*.sqlite
+logs/
+*.db
+
+# Environment variables
+.env
+.env.*
+
+# Cache
+.cache/
+.pytest_cache/
+
+# Distribution
+dist/
+build/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# RAG specific
+chunks/
+raw_data/
+processed_data/
+index_store/
+
+# Cursor IDE
+.cursor/
+.cursorrules
+*.cursor-sql
