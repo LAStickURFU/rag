@@ -1,0 +1,28 @@
+{
+  "character_chunker": {
+    "chunks_count": 18,
+    "processing_time": 0.44102025032043457,
+    "avg_characters": 397.3333333333333,
+    "min_characters": 45,
+    "max_characters": 657,
+    "estimated_tokens_avg": 98.94444444444444,
+    "first_chunk": {
+      "text": "# RAG-системы: теория и практика\n\n## Введение",
+      "length": 45,
+      "estimated_tokens": 11
+    }
+  },
+  "token_chunker": {
+    "chunks_count": 2,
+    "processing_time": 0.005588054656982422,
+    "avg_tokens": 476.0,
+    "min_tokens": 445,
+    "max_tokens": 507,
+    "avg_characters": 1950.0,
+    "first_chunk": {
+      "text": "# RAG-системы: теория и практика\n\n## Введение\n\nRetrieval-Augmented Generation (RAG) — это подход к обработке естественного языка, который объединяет поиск информации и генерацию текста. В отличие от к...",
+      "length": 2084,
+      "tokens": 507
+    }
+  }
+}

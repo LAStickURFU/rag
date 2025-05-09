@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Any
 from dotenv import load_dotenv
 from functools import lru_cache
+from dataclasses import dataclass
 
 # Загружаем переменные окружения из .env файла
 load_dotenv()
@@ -53,9 +54,56 @@ MIN_SCORE_THRESHOLD = float(os.getenv("MIN_SCORE_THRESHOLD", "0.45"))
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 
+# Настройки токенового чанкера
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "512"))
+OVERLAP_TOKENS = int(os.getenv("OVERLAP_TOKENS", "20"))
+USE_TOKEN_CHUNKER = os.getenv("USE_TOKEN_CHUNKER", "true").lower() == "true"
+TOKEN_MODEL = os.getenv("TOKEN_MODEL", "mistralai/Mistral-7B-Instruct-v0.2")
+
 # Сводная информация о конфигурации для отладки
 # def get_config_summary():
 #     ... # Не используется
+
+@dataclass
+class QdrantConfig:
+    """Конфигурация для Qdrant."""
+    
+    host: str = QDRANT_HOST
+    port: int = QDRANT_PORT
+    
+    @property
+    def url(self) -> str:
+        """URL для подключения к Qdrant."""
+        return f"http://{self.host}:{self.port}"
+
+
+class RagConfig:
+    """Конфигурация системы RAG."""
+    
+    def __init__(self):
+        """Инициализация конфигурации RAG."""
+        self.model_name = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
+        self.collection_name = os.getenv("QDRANT_COLLECTION", "documents")
+        self.use_hybrid = os.getenv("USE_HYBRID_SEARCH", "true").lower() == "true"
+        self.use_reranker = os.getenv("USE_RERANKER", "true").lower() == "true"
+        self.use_adaptive_k = os.getenv("USE_ADAPTIVE_K", "true").lower() == "true"
+        self.dense_weight = float(os.getenv("DENSE_WEIGHT", "0.7"))
+        self.sparse_weight = float(os.getenv("SPARSE_WEIGHT", "0.3"))
+        self.reranker_weight = float(os.getenv("RERANKER_WEIGHT", "0.5"))
+        self.max_context_docs = int(os.getenv("MAX_CONTEXT_DOCS", "5"))
+        
+        # Параметры символьного чанкера (для обратной совместимости)
+        self.chunk_size = int(os.getenv("CHUNK_SIZE", "400"))
+        self.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", "200"))
+        
+        # Параметры токенового чанкера
+        self.use_token_chunker = os.getenv("USE_TOKEN_CHUNKER", "true").lower() == "true"
+        self.max_tokens = int(os.getenv("MAX_TOKENS", "512"))
+        self.overlap_tokens = int(os.getenv("OVERLAP_TOKENS", "20"))
+        self.token_model_name = os.getenv("TOKEN_MODEL", "mistralai/Mistral-7B-Instruct-v0.2")
+        
+        # Параметры кэширования
+        self.cache_embeddings = os.getenv("CACHE_EMBEDDINGS", "true").lower() == "true"
 
 @lru_cache()
 def get_config() -> Dict[str, Any]:
@@ -107,3 +155,40 @@ def get_chunk_size() -> int:
 def get_chunk_overlap() -> int:
     """Получение перекрытия чанков."""
     return get_config()["CHUNK_OVERLAP"]
+
+def create_rag_service_from_config(custom_config=None):
+    """
+    Фабричный метод для создания экземпляра RAGService с согласованными параметрами из конфигурации.
+    
+    Args:
+        custom_config: Опциональная пользовательская конфигурация, которая переопределяет настройки
+                     из переменных окружения
+                     
+    Returns:
+        Экземпляр RAGService с согласованными параметрами
+    """
+    from app.rag import RAGService
+    
+    # Получаем базовую конфигурацию
+    config = custom_config or RagConfig()
+    
+    # Создаем экземпляр RAGService с параметрами из конфигурации
+    rag_service = RAGService(
+        model_name=config.model_name,
+        collection_name=config.collection_name,
+        use_hybrid=config.use_hybrid,
+        use_reranker=config.use_reranker,
+        use_adaptive_k=config.use_adaptive_k,
+        dense_weight=config.dense_weight,
+        sparse_weight=config.sparse_weight,
+        reranker_weight=config.reranker_weight,
+        max_context_docs=config.max_context_docs,
+        chunk_size=config.chunk_size,
+        chunk_overlap=config.chunk_overlap,
+        use_token_chunker=config.use_token_chunker,
+        max_tokens=config.max_tokens,
+        overlap_tokens=config.overlap_tokens,
+        cache_embeddings=config.cache_embeddings
+    )
+    
+    return rag_service

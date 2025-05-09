@@ -19,6 +19,7 @@ from collections import defaultdict
 import traceback
 import sys
 import time
+import asyncio
 
 # Импорты RAGAS для версии 0.2.0
 from ragas import EvaluationDataset, evaluate
@@ -41,7 +42,7 @@ from ragas.run_config import RunConfig
 
 # Импорты из проекта
 from app.rag import RAGService, Document
-from app.ollama_client import OllamaLLM
+from app.ollama_client import OllamaLLM, get_ollama_instance
 from app.chunking.robust_chunker import RobustChunker
 from app.evaluation.logger import RAGEvaluationLogger
 from app.utils.metrics_wrapper import track_latency, track_quality
@@ -202,6 +203,36 @@ def get_builtin_datasets() -> Dict[str, Path]:
     
     return datasets
 
+# Функция для обработки ошибок с SentenceTransformer и предоставления резервного метода
+def safe_import_sentence_transformer(model_name="intfloat/multilingual-e5-large"):
+    """
+    Безопасно импортирует SentenceTransformer и возвращает инициализированную модель или None
+    
+    Args:
+        model_name: Название модели для загрузки
+        
+    Returns:
+        Модель SentenceTransformer или None в случае ошибки
+    """
+    try:
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer(model_name)
+        logger.info(f"Successfully loaded SentenceTransformer model: {model_name}")
+        return model
+    except Exception as e:
+        logger.warning(f"Error importing or loading SentenceTransformer: {str(e)}")
+        try:
+            # Пробуем альтернативную модель
+            alternative_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+            logger.info(f"Trying alternative model: {alternative_model}")
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer(alternative_model)
+            logger.info(f"Successfully loaded alternative SentenceTransformer model")
+            return model
+        except Exception as alt_e:
+            logger.warning(f"Error loading alternative model: {str(alt_e)}")
+            return None
+
 @track_latency(phase="evaluation")
 class RAGEvaluator:
     """
@@ -232,6 +263,9 @@ class RAGEvaluator:
             log_dir="app/evaluation/error_logs"
         )
         
+        # Инициализируем Ollama клиент для генерации ответов
+        self.ollama_client = get_ollama_instance()
+        
         # Загрузка датасета
         self.dataset = self._load_dataset(dataset_file)
         logger.info(f"Loaded evaluation dataset with {len(self.dataset)} examples")
@@ -249,6 +283,10 @@ class RAGEvaluator:
             "generation_latency": [],
             "total_latency": []
         }
+        
+        # Применяем патчи и исправления
+        patch_ragas_executor()
+        patch_ragas_evaluate()
     
     def _load_dataset(self, dataset_file: str) -> List[Dict[str, Any]]:
         """
@@ -262,7 +300,18 @@ class RAGEvaluator:
         """
         try:
             with open(dataset_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                dataset = json.load(f)
+                
+                # Проходим по датасету и обеспечиваем, чтобы у каждого примера было поле ground_truth
+                for item in dataset:
+                    # Если есть ground_truth, но нет answer, копируем ground_truth в answer для совместимости
+                    if "ground_truth" in item and not item.get("answer"):
+                        item["answer"] = item["ground_truth"]
+                    # Если есть answer, но нет ground_truth, копируем answer в ground_truth
+                    elif "answer" in item and not item.get("ground_truth"):
+                        item["ground_truth"] = item["answer"]
+                        
+                return dataset
         except Exception as e:
             logger.error(f"Error loading dataset: {str(e)}")
             return []
@@ -280,24 +329,80 @@ class RAGEvaluator:
             Оценка сходства (0-1)
         """
         try:
-            from sentence_transformers import SentenceTransformer, util
-            
-            # Загружаем модель с кэшированием, чтобы не загружать её каждый раз
-            if not hasattr(self, "_similarity_model"):
-                self._similarity_model = SentenceTransformer("intfloat/multilingual-e5-large")
-                logger.info("Loaded similarity model for answer evaluation")
-            
-            # Кодируем тексты
-            pred_embedding = self._similarity_model.encode(predicted, convert_to_tensor=True)
-            ref_embedding = self._similarity_model.encode(reference, convert_to_tensor=True)
-            
-            # Вычисляем косинусное сходство
-            similarity = float(util.pytorch_cos_sim(pred_embedding, ref_embedding)[0][0])
-            
-            return similarity
+            # Пытаемся использовать семантическое сходство если есть модель
+            if not hasattr(self, "_similarity_model") or self._similarity_model is None:
+                # Загрузка модели при первом использовании
+                self._similarity_model = safe_import_sentence_transformer()
+                
+            # Если у нас есть рабочая модель, используем её
+            if self._similarity_model is not None:
+                from sentence_transformers import util
+                # Кодируем тексты
+                pred_embedding = self._similarity_model.encode(predicted, convert_to_tensor=True)
+                ref_embedding = self._similarity_model.encode(reference, convert_to_tensor=True)
+                
+                # Вычисляем косинусное сходство
+                similarity = float(util.pytorch_cos_sim(pred_embedding, ref_embedding)[0][0])
+                return similarity
+                
+            # Если модель недоступна, используем текстовое сходство
+            return self.compute_string_similarity(predicted, reference)
         except Exception as e:
-            logger.error(f"Error computing answer similarity: {str(e)}")
+            logger.warning(f"Failed to compute semantic similarity: {str(e)}. Using string similarity instead.")
+            return self.compute_string_similarity(predicted, reference)
+    
+    def compute_string_similarity(self, text1: str, text2: str) -> float:
+        """
+        Вычисляет простое текстовое сходство между двумя строками.
+        Использует overlap coefficient и cosine similarity на уровне слов.
+        
+        Args:
+            text1: Первый текст
+            text2: Второй текст
+            
+        Returns:
+            Оценка сходства (0-1)
+        """
+        if not text1 or not text2:
             return 0.0
+        
+        # Нормализуем тексты: приводим к нижнему регистру, убираем пунктуацию
+        import re
+        from collections import Counter
+        
+        def normalize_text(text):
+            # Удаляем пунктуацию, приводим к нижнему регистру
+            text = re.sub(r'[^\w\s]', '', text.lower())
+            # Разбиваем на слова
+            return text.split()
+        
+        # Нормализуем и токенизируем
+        tokens1 = normalize_text(text1)
+        tokens2 = normalize_text(text2)
+        
+        if not tokens1 or not tokens2:
+            return 0.0
+            
+        # Создаем множества и счетчики слов
+        set1 = set(tokens1)
+        set2 = set(tokens2)
+        count1 = Counter(tokens1)
+        count2 = Counter(tokens2)
+        
+        # Вычисляем overlap coefficient (отношение размера пересечения к размеру меньшего множества)
+        # Это даёт хорошие результаты, когда один текст является подмножеством другого
+        overlap = len(set1.intersection(set2)) / min(len(set1), len(set2)) if min(len(set1), len(set2)) > 0 else 0
+        
+        # Вычисляем косинусное сходство между векторами частот слов
+        # Это даёт хорошие результаты для текстов разной длины с похожей лексикой
+        dot_product = sum(count1[word] * count2[word] for word in set1.intersection(set2))
+        magnitude1 = sum(count**2 for count in count1.values()) ** 0.5
+        magnitude2 = sum(count**2 for count in count2.values()) ** 0.5
+        
+        cosine = dot_product / (magnitude1 * magnitude2) if magnitude1 * magnitude2 > 0 else 0
+        
+        # Возвращаем взвешенное среднее обоих метрик
+        return 0.5 * overlap + 0.5 * cosine
     
     def compute_context_precision(self, retrieved_contexts: List[str], 
                                  relevant_contexts: List[str]) -> float:
@@ -346,7 +451,10 @@ class RAGEvaluator:
             Результаты оценки для примера
         """
         question = example["question"]
-        reference_answer = example["answer"]
+        # Используем ground_truth вместо answer, так как в датасетах эталонные ответы в этом поле
+        reference_answer = example.get("ground_truth", example.get("answer", ""))
+        
+        # Получаем предопределенные релевантные контексты или создаем пустой список
         relevant_contexts = example.get("relevant_contexts", [])
         
         # Замеряем время поиска
@@ -360,8 +468,47 @@ class RAGEvaluator:
         # Формируем промпт и генерируем ответ
         generation_start = time.time()
         prompt = self.rag_service.generate_prompt(question)
-        answer = self.rag_service.generate_answer(prompt)
+        
+        # Используем синхронный метод generate_sync
+        try:
+            answer = self.ollama_client.generate_sync(prompt)
+        except Exception as e:
+            logger.error(f"Error generating answer: {str(e)}")
+            answer = f"Ошибка генерации: {str(e)}"
+        
         generation_time = time.time() - generation_start
+        
+        # Если нет предопределенных релевантных контекстов, автоматически определяем их
+        # путем поиска фрагментов, содержащих части эталонного ответа
+        if not relevant_contexts and reference_answer:
+            try:
+                # Загружаем модель для эмбеддингов, если её еще нет
+                if not hasattr(self, "_similarity_model"):
+                    from sentence_transformers import SentenceTransformer
+                    self._similarity_model = SentenceTransformer("intfloat/multilingual-e5-large")
+                    logger.info("Loaded similarity model for context relevance detection")
+                
+                # Вычисляем эмбеддинги для ответа и контекстов
+                ref_embedding = self._similarity_model.encode(reference_answer, convert_to_tensor=True)
+                context_embeddings = self._similarity_model.encode(retrieved_contexts, convert_to_tensor=True)
+                
+                # Вычисляем схожесть эталонного ответа с каждым контекстом
+                from sentence_transformers import util
+                similarities = util.pytorch_cos_sim(ref_embedding, context_embeddings)
+                
+                # Считаем контекст релевантным, если его сходство с эталонным ответом выше порога
+                similarity_threshold = 0.4  # Порог для определения релевантности
+                for i, similarity in enumerate(similarities[0]):
+                    if similarity > similarity_threshold:
+                        relevant_contexts.append(retrieved_contexts[i])
+                
+                logger.info(f"Автоматически определены {len(relevant_contexts)} релевантных контекстов")
+            except Exception as e:
+                logger.warning(f"Не удалось автоматически определить релевантные контексты: {str(e)}")
+                # Если ошибка, считаем все контексты релевантными, если они содержат части ответа
+                for ctx in retrieved_contexts:
+                    if reference_answer and any(part in ctx for part in reference_answer.split()):
+                        relevant_contexts.append(ctx)
         
         # Вычисляем метрики
         answer_similarity = self.compute_answer_similarity(answer, reference_answer)
@@ -385,7 +532,7 @@ class RAGEvaluator:
         
         # Возвращаем результаты
         return {
-                "question": question,
+            "question": question,
             "reference_answer": reference_answer,
             "generated_answer": answer,
             "retrieved_contexts": retrieved_contexts,
@@ -508,10 +655,13 @@ def main():
     from app.ollama_client import OllamaLLM
     ollama_client = OllamaLLM(
         model_name=args.model,
-        temperature=0,  # Низкая температура для более детерминированных ответов
-        max_tokens=512,  # Ограничиваем длину ответа
-        top_p=0.9,
-        presence_penalty=0.2
+        temperature=0,     # Низкая температура для более детерминированных ответов
+        num_predict=512,   # Количество токенов для генерации
+        top_p=0.95,        # Вероятностный порог для сэмплирования
+        top_k=20,          # Ограничиваем список кандидатов для каждого токена
+        stop=['<|im_end|>', '</answer>', '\n\n', '\nВОПРОС:', 'ВОПРОС:'],  # Стоп-токены
+        repeat_penalty=1.15,  # Штраф за повторение
+        frequency_penalty=0.05  # Штраф за частоту
     )
     rag_service.llm_client = ollama_client
     

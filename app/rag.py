@@ -16,10 +16,16 @@ from langchain.text_splitter import (
     MarkdownHeaderTextSplitter
 )
 from langchain.schema import Document as LCDocument
+from langchain.vectorstores import Qdrant as LangchainQdrant
 
 # Импорт Qdrant для векторной базы данных
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
+
+# Импорты из проекта
+from app.config import QdrantConfig, RagConfig
+from app.chunking.robust_chunker import RobustChunker, Document, Chunk
+from app.chunking.token_chunker import TokenChunker, get_default_token_chunker
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -60,197 +66,6 @@ class HTMLTextSplitter:
             Список LangChain документов
         """
         return self.splitter.create_documents(texts, metadatas)
-
-class Document:
-    """Класс для представления документа."""
-    
-    def __init__(self, content: str, metadata: Optional[Dict[str, Any]] = None):
-        """
-        Инициализация документа.
-        
-        Args:
-            content: Текстовое содержимое документа
-            metadata: Метаданные документа (источник, дата и т.д.)
-        """
-        self.content = content
-        self.metadata = metadata or {}
-    
-    def __str__(self) -> str:
-        return f"Document(content={self.content[:50]}..., metadata={self.metadata})"
-
-class Chunk:
-    """Класс для представления фрагмента документа."""
-    
-    def __init__(self, text: str, doc_id: str, chunk_id: int, metadata: Optional[Dict[str, Any]] = None):
-        """
-        Инициализация фрагмента.
-        
-        Args:
-            text: Текстовое содержимое фрагмента
-            doc_id: Идентификатор исходного документа
-            chunk_id: Номер фрагмента в документе
-            metadata: Метаданные фрагмента
-        """
-        self.text = text
-        self.doc_id = doc_id
-        self.chunk_id = chunk_id
-        self.metadata = metadata or {}
-    
-    def __str__(self) -> str:
-        return f"Chunk(text={self.text[:50]}..., doc_id={self.doc_id}, chunk_id={self.chunk_id})"
-
-class SmartChunker:
-    """Улучшенный класс для разбиения документов на фрагменты с использованием LangChain."""
-    
-    def __init__(self, chunk_size: int = 400, chunk_overlap: int = 100):
-        """
-        Инициализация умного чанкера.
-        
-        Args:
-            chunk_size: Максимальный размер фрагмента в символах
-            chunk_overlap: Перекрытие между соседними фрагментами в символах
-        """
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-        
-        # Создаем различные разделители текста для разных типов контента
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            separators=["\n\n", "\n", ". ", " ", ""],
-            keep_separator=True
-        )
-        
-        # Заголовки для markdown, используются для более умного разбиения документов
-        self.md_headers = [
-            ("#", "Heading1"),
-            ("##", "Heading2"),
-            ("###", "Heading3"),
-            ("####", "Heading4"),
-        ]
-        
-        self.md_splitter = MarkdownHeaderTextSplitter(
-            headers_to_split_on=self.md_headers
-        )
-        
-        self.html_splitter = HTMLTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
-        )
-    
-    def _detect_content_type(self, content: str) -> str:
-        """
-        Определяет тип содержимого для выбора подходящего разделителя.
-        
-        Args:
-            content: Текстовое содержимое документа
-            
-        Returns:
-            Тип содержимого ("markdown", "html", "text")
-        """
-        # Проверяем наличие markdown-заголовков
-        if re.search(r'^#+\s+', content, re.MULTILINE):
-            return "markdown"
-        
-        # Проверяем наличие HTML-тегов
-        if re.search(r'<\/?[a-z][\s\S]*>', content):
-            return "html"
-        
-        # По умолчанию считаем текстом
-        return "text"
-    
-    def _split_by_content_type(self, content: str, content_type: str, metadata: Dict[str, Any]) -> List[LCDocument]:
-        """
-        Разбивает контент в зависимости от типа.
-        
-        Args:
-            content: Текстовое содержимое
-            content_type: Тип содержимого
-            metadata: Метаданные документа
-            
-        Returns:
-            Список фрагментов в формате LangChain
-        """
-        if content_type == "markdown":
-            # Сначала разбиваем по заголовкам, затем по размеру чанков
-            md_docs = self.md_splitter.split_text(content)
-            return self.text_splitter.split_documents(md_docs)
-        
-        elif content_type == "html":
-            return self.html_splitter.create_documents([content], [metadata])
-        
-        else:  # text
-            return self.text_splitter.create_documents([content], [metadata])
-    
-    def split_text(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """
-        Умное разбиение текста на фрагменты.
-        
-        Args:
-            text: Исходный текст
-            metadata: Метаданные для контекста
-            
-        Returns:
-            Список словарей {text: str, metadata: dict}
-        """
-        metadata = metadata or {}
-        content_type = self._detect_content_type(text)
-        
-        # Получаем LangChain документы
-        lc_docs = self._split_by_content_type(text, content_type, metadata)
-        
-        # Конвертируем в наш формат
-        results = []
-        for i, doc in enumerate(lc_docs):
-            chunk_metadata = doc.metadata.copy()
-            chunk_metadata["chunk_id"] = i
-            chunk_metadata["content_type"] = content_type
-            
-            # Добавляем информацию о заголовках для markdown
-            if content_type == "markdown" and "Heading1" in chunk_metadata:
-                chunk_metadata["heading"] = chunk_metadata.get("Heading1", "")
-                if "Heading2" in chunk_metadata:
-                    chunk_metadata["heading"] += " > " + chunk_metadata.get("Heading2", "")
-                if "Heading3" in chunk_metadata:
-                    chunk_metadata["heading"] += " > " + chunk_metadata.get("Heading3", "")
-            
-            results.append({
-                "text": doc.page_content,
-                "metadata": chunk_metadata
-            })
-        
-        return results
-    
-    def create_chunks_from_document(self, document: Document, doc_id: str) -> List[Chunk]:
-        """
-        Создает фрагменты из документа с умным разбиением.
-        
-        Args:
-            document: Документ для разбиения
-            doc_id: Идентификатор документа
-            
-        Returns:
-            Список фрагментов
-        """
-        # Подготавливаем метаданные документа
-        doc_metadata = document.metadata.copy()
-        doc_metadata["doc_id"] = doc_id
-        
-        # Умное разбиение с учетом структуры документа
-        chunks_data = self.split_text(document.content, doc_metadata)
-        
-        # Преобразуем в формат Chunk
-        chunks = []
-        for i, chunk_data in enumerate(chunks_data):
-            chunk = Chunk(
-                text=chunk_data["text"],
-                doc_id=doc_id,
-                chunk_id=i,
-                metadata=chunk_data["metadata"]
-            )
-            chunks.append(chunk)
-        
-        return chunks
 
 class Vectorizer:
     """Класс для векторизации текстовых фрагментов."""
@@ -600,63 +415,85 @@ class Chunker:
         return chunks
 
 class RAGService:
-    """Служба для реализации Retrieval-Augmented Generation."""
+    """Сервис для обработки RAG-запросов."""
     
-    def __init__(
-        self, 
-        index_name: str = "default",
-        model_name: str = "intfloat/multilingual-e5-large",
-        chunk_size: int = 400,
-        chunk_overlap: int = 200,
-        use_hybrid_search: bool = True,
-        use_reranker: bool = True,
-        dense_weight: float = 0.6,
-        reranker_weight: float = 0.6,
-        use_adaptive_k: bool = True,
-        cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-12-v2",
-        language: str = "russian",
-        spacy_model: str = "ru_core_news_md",
-        cache_embeddings: bool = True
-    ):
+    def __init__(self, 
+                 model_name: str = "intfloat/multilingual-e5-base",
+                 collection_name: str = "documents",
+                 dense_weight: float = 0.3,
+                 sparse_weight: float = 0.7,
+                 reranker_weight: float = 0.5,
+                 chunk_size: int = 400,
+                 chunk_overlap: int = 200,
+                 max_context_docs: int = 5,
+                 use_hybrid: bool = True,
+                 use_reranker: bool = True,
+                 use_adaptive_k: bool = True,
+                 cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                 cache_embeddings: bool = True,
+                 use_token_chunker: bool = True,
+                 max_tokens: int = 512,
+                 overlap_tokens: int = 20):
         """
-        Инициализация RAG сервиса.
+        Инициализирует сервис RAG.
         
         Args:
-            index_name: Имя индекса для хранения векторов
-            model_name: Название модели для векторизации
-            chunk_size: Размер фрагмента документа
-            chunk_overlap: Перекрытие между фрагментами
-            use_hybrid_search: Использовать ли гибридный поиск
+            model_name: Название модели для эмбеддингов
+            collection_name: Название коллекции в Qdrant
+            dense_weight: Вес плотного поиска в гибридном
+            sparse_weight: Вес разреженного поиска в гибридном
+            reranker_weight: Вес переранжирования
+            chunk_size: Размер чанка в символах (для символьного чанкера)
+            chunk_overlap: Перекрытие между чанками в символах (для символьного чанкера)
+            max_context_docs: Максимальное количество документов в контексте
+            use_hybrid: Использовать ли гибридный поиск
             use_reranker: Использовать ли переранжирование
-            dense_weight: Вес dense retrieval в гибридном поиске (0-1)
-            reranker_weight: Вес reranker в итоговом ранжировании (0-1)
             use_adaptive_k: Использовать ли адаптивное количество документов
-            cross_encoder_model: Название модели CrossEncoder
-            language: Язык для BM25 и NLTK
-            spacy_model: Название модели spaCy для обработки текста
-            cache_embeddings: Использовать ли кэширование эмбеддингов
+            cross_encoder_model: Модель для cross-encoder
+            cache_embeddings: Кэшировать ли эмбеддинги
+            use_token_chunker: Использовать ли токеновый чанкер вместо символьного
+            max_tokens: Максимальное количество токенов в чанке (для токенового чанкера)
+            overlap_tokens: Перекрытие между чанками в токенах (для токенового чанкера)
         """
-        self.index_name = index_name
-        self.model_name = model_name
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-        self.use_hybrid_search = use_hybrid_search
-        self.use_reranker = use_reranker
-        self.dense_weight = dense_weight
-        self.reranker_weight = reranker_weight
-        self.use_adaptive_k = use_adaptive_k
-        self.language = language
-        self.spacy_model = spacy_model
-        self.cache_embeddings = cache_embeddings
+        # Загружаем конфигурации
+        self.qdrant_config = QdrantConfig()
+        self.rag_config = RagConfig()
         
-        # Инициализируем улучшенный чанкер с резервными методами
-        from app.chunking.robust_chunker import RobustChunker
-        self.chunker = RobustChunker(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            language=language,
-            spacy_model=spacy_model
-        )
+        # Сохраняем параметры
+        self.model_name = model_name
+        self.collection_name = collection_name
+        self.dense_weight = dense_weight
+        self.sparse_weight = sparse_weight
+        self.reranker_weight = reranker_weight
+        self.use_hybrid = use_hybrid
+        self.use_reranker = use_reranker
+        self.use_adaptive_k = use_adaptive_k
+        self.max_context_docs = max_context_docs
+        self.token_limit = 4096  # Для LLM-модели
+        self.use_token_chunker = use_token_chunker
+        
+        # Логирование параметров
+        logger.info(f"Initializing RAG service with parameters:")
+        logger.info(f"  Model: {model_name}")
+        logger.info(f"  Collection: {collection_name}")
+        logger.info(f"  Hybrid search: {use_hybrid} (dense: {dense_weight}, sparse: {sparse_weight})")
+        logger.info(f"  Reranker: {use_reranker} (weight: {reranker_weight})")
+        logger.info(f"  Adaptive k: {use_adaptive_k}")
+        logger.info(f"  Token-based chunker: {use_token_chunker}")
+        
+        # Создаем чанкер в зависимости от выбранного типа
+        if use_token_chunker:
+            logger.info(f"Using token-based chunker (max_tokens={max_tokens}, overlap={overlap_tokens})")
+            self.chunker = TokenChunker(
+                max_tokens=max_tokens,
+                overlap_tokens=overlap_tokens
+            )
+        else:
+            logger.info(f"Using character-based chunker (chunk_size={chunk_size}, overlap={chunk_overlap})")
+            self.chunker = RobustChunker(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap
+            )
         
         # Инициализируем векторизатор для эмбеддингов - используем кэширующую версию
         if cache_embeddings:
@@ -668,10 +505,10 @@ class RAGService:
         
         # Создаем векторный индекс
         vector_size = self.vectorizer.vector_size
-        self.index = QdrantIndex(vector_size=vector_size, index_name=index_name)
+        self.index = QdrantIndex(vector_size=vector_size, index_name=collection_name)
         
         # Инициализируем гибридный поисковик, если требуется
-        if use_hybrid_search:
+        if use_hybrid:
             try:
                 from app.retrieval.hybrid_retriever import HybridRetriever
                 self.hybrid_retriever = HybridRetriever(
@@ -680,14 +517,14 @@ class RAGService:
                     use_reranker=use_reranker,
                     use_adaptive_k=use_adaptive_k,
                     cross_encoder_model=cross_encoder_model,
-                    language=language,
-                    spacy_model=spacy_model
+                    language=self.rag_config.language,
+                    spacy_model=self.rag_config.spacy_model
                 )
                 logger.info("Initialized hybrid retriever with BM25 and dense search")
             except Exception as e:
                 logger.warning(f"Failed to initialize hybrid retriever: {str(e)}")
                 self.hybrid_retriever = None
-                self.use_hybrid_search = False
+                self.use_hybrid = False
         else:
             self.hybrid_retriever = None
     
@@ -721,7 +558,7 @@ class RAGService:
         self.index.add_chunks(chunks, vectors)
         
         # Обновляем индекс BM25, если используется гибридный поиск
-        if self.use_hybrid_search and self.hybrid_retriever:
+        if self.use_hybrid and self.hybrid_retriever:
             try:
                 self.hybrid_retriever.index_documents(chunks)
                 logger.info(f"Updated BM25 index with {len(chunks)} chunks")
@@ -757,7 +594,7 @@ class RAGService:
         dense_results = self.index.search(query_vector, top_k)
         
         # Если гибридный поиск не используется, возвращаем результаты dense retrieval
-        if not self.use_hybrid_search or not self.hybrid_retriever:
+        if not self.use_hybrid or not self.hybrid_retriever:
             return dense_results
         
         # Иначе выполняем гибридный поиск
