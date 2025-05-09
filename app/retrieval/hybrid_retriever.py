@@ -83,28 +83,35 @@ class HybridRetriever:
     
     def _normalize_scores(self, scores: List[Tuple[int, float]]) -> List[Tuple[int, float]]:
         """
-        Нормализует scores в диапазон [0, 1].
+        Нормализует оценки (scores) результатов.
         
         Args:
-            scores: Список (индекс, score)
+            scores: Список кортежей (индекс, оценка)
             
         Returns:
-            Список (индекс, нормализованный score)
+            Список кортежей (индекс, нормализованная оценка)
         """
         if not scores:
             return []
             
-        # Находим минимальное и максимальное значение
-        min_score = min(score for _, score in scores)
-        max_score = max(score for _, score in scores)
-        score_range = max_score - min_score
+        # Извлекаем оценки
+        indices = [idx for idx, _ in scores]
+        values = [score for _, score in scores]
         
-        # Нормализуем
-        if score_range > 0:
-            return [(idx, (score - min_score) / score_range) for idx, score in scores]
-        else:
-            # Если все scores одинаковые, устанавливаем их в 1.0
-            return [(idx, 1.0) for idx, score in scores]
+        # Находим min и max
+        min_val = min(values)
+        max_val = max(values)
+        
+        # Проверка на случай, если все значения равны
+        if max_val == min_val:
+            # Если все значения одинаковы, возвращаем единичную нормализацию
+            return [(idx, 1.0) for idx in indices]
+        
+        # Нормализуем в диапазон [0, 1]
+        normalized = [(idx, (val - min_val) / (max_val - min_val)) 
+                     for idx, val in zip(indices, values)]
+                     
+        return normalized
     
     def _adaptive_k(self, scores: List[Tuple[int, float]], min_k: int = 3, max_k: int = 10) -> int:
         """
@@ -157,14 +164,16 @@ class HybridRetriever:
     
     def _rrf_score(self, rank: int, k: int = 60) -> float:
         """
-        Вычисляет Reciprocal Rank Fusion (RRF) score.
+        Вычисляет RRF (Reciprocal Rank Fusion) оценку для ранга.
+        
+        Формула: 1 / (k + rank), где k - константа (обычно = 60).
         
         Args:
-            rank: Ранг документа
-            k: Константа для RRF (обычно 60)
+            rank: Ранг документа (начиная с 1)
+            k: Константа RRF (по умолчанию 60 по рекомендации исследований)
             
         Returns:
-            RRF score
+            RRF оценка
         """
         return 1.0 / (k + rank)
     
@@ -223,25 +232,35 @@ class HybridRetriever:
         # Сортируем по убыванию score
         hybrid_scores.sort(key=lambda x: x[1], reverse=True)
         
-        # Определяем адаптивное количество документов, если нужно
-        if self.use_adaptive_k:
-            adaptive_k = self._adaptive_k(hybrid_scores, min_k=3, max_k=top_k)
-            logger.info(f"Adaptive K selected: {adaptive_k} (from max top_k: {top_k})")
-            top_k = adaptive_k
+        # Добавляем Dynamic Rerank Threshold
+        MIN_RERANK_THRESHOLD = 0.4  # Минимальный порог для переранжирования
         
-        # Берем top_k результатов
-        top_hybrid_scores = hybrid_scores[:top_k]
-        top_indices = [idx for idx, _ in top_hybrid_scores]
-        top_chunks = [chunks[idx] for idx in top_indices]
-        top_chunk_texts = [chunk.text for chunk in top_chunks]
-        top_scores = [score for _, score in top_hybrid_scores]
+        # Отбираем все фрагменты выше порога для переранжирования
+        threshold_scores = [(idx, score) for idx, score in hybrid_scores 
+                           if score >= MIN_RERANK_THRESHOLD]
+        
+        # Если нет результатов выше порога, берем top_k
+        if not threshold_scores:
+            threshold_scores = hybrid_scores[:top_k]
+            
+        # Ограничиваем количество для производительности
+        max_rerank_candidates = min(top_k * 3, len(threshold_scores))
+        rerank_candidates = threshold_scores[:max_rerank_candidates]
+        
+        # Формируем данные для переранжирования
+        rerank_indices = [idx for idx, _ in rerank_candidates]
+        rerank_chunks = [chunks[idx] for idx in rerank_indices]
+        rerank_chunk_texts = [chunk.text for chunk in rerank_chunks]
+        rerank_scores = [score for _, score in rerank_candidates]
+        
+        logger.info(f"Selected {len(rerank_candidates)} candidates for reranking (min threshold: {MIN_RERANK_THRESHOLD})")
         
         # Если используем переранжирование и reranker доступен
         final_results = []
         if self.use_reranker and self.reranker and self.reranker.is_available():
             try:
                 # Анализируем разброс scores в предварительных результатах
-                score_range = max(top_scores) - min(top_scores) if top_scores else 0
+                score_range = max(rerank_scores) - min(rerank_scores) if rerank_scores else 0
                 
                 # Если разброс высокий, значит есть четкое разделение по релевантности
                 # и CrossEncoder может быть более полезен
@@ -250,12 +269,12 @@ class HybridRetriever:
                 
                 # Переранжируем с учетом оригинальных scores и динамического веса
                 reranker_results = self.reranker.rerank_with_original_weights(
-                    query, top_chunk_texts, top_scores, weight=dynamic_weight
+                    query, rerank_chunk_texts, rerank_scores, weight=dynamic_weight
                 )
                 
                 # Формируем окончательные результаты
                 for idx, score in reranker_results:
-                    orig_idx = top_indices[idx]
+                    orig_idx = rerank_indices[idx]
                     final_results.append((chunks[orig_idx], score))
                     
                 logger.info(f"Reranked {len(reranker_results)} results using CrossEncoder")
@@ -263,11 +282,22 @@ class HybridRetriever:
             except Exception as e:
                 logger.error(f"Reranking failed: {str(e)}")
                 # Если переранжирование не удалось, возвращаем гибридные результаты
-                for idx, score in top_hybrid_scores:
+                for idx, score in rerank_candidates:
                     final_results.append((chunks[idx], score))
         else:
             # Если переранжирование не используется, возвращаем гибридные результаты
-            for idx, score in top_hybrid_scores:
+            for idx, score in rerank_candidates:
                 final_results.append((chunks[idx], score))
         
-        return final_results 
+        # Отсортировать финальные результаты по убыванию score и ограничить top_k
+        final_results.sort(key=lambda x: x[1], reverse=True)
+        
+        # Определяем адаптивное количество документов, если нужно
+        if self.use_adaptive_k:
+            adaptive_k = self._adaptive_k([(i, score) for i, (_, score) in enumerate(final_results)], 
+                                        min_k=3, max_k=top_k)
+            logger.info(f"Adaptive K selected: {adaptive_k} (from max top_k: {top_k})")
+            top_k = adaptive_k
+        
+        # Возвращаем финальные результаты с ограничением top_k
+        return final_results[:top_k] 

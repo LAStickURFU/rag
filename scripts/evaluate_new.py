@@ -1,206 +1,29 @@
-#!/usr/bin/env python3
 """
-Evaluate RAG pipeline using RAGAS metrics and visualize the results.
-Работает с существующей RAG-системой и адаптирован для версии RAGAS 0.2.0
+Скрипт для оценки RAG-системы с использованием улучшенных метрик и логирования ошибок.
 """
+
+import sys
 import os
 import json
+import time
 import logging
 import argparse
-import numpy as np
-import matplotlib
-matplotlib.use('Agg')  # Использовать не-интерактивный бэкенд для избежания ошибок в фоновых потоках
-import matplotlib.pyplot as plt
-import requests
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, Union, Set
 from datetime import datetime
-from collections import defaultdict
-import traceback
-import sys
-import time
+from typing import Dict, List, Any, Optional, Tuple
 
-# Импорты RAGAS для версии 0.2.0
-from ragas import EvaluationDataset, evaluate
-from ragas.metrics import (
-    faithfulness,
-    answer_relevancy,
-    context_recall,
-    context_precision,
-)
-from ragas.executor import Executor
-from langchain_community.llms import Ollama
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from datasets import load_dataset
+import numpy as np
 
-# Импорты для патчинга RAGAS Executor
-import types
-from functools import wraps
-from tqdm.auto import tqdm
-from ragas.run_config import RunConfig
+# Импортируем модули RAG
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Импорты из проекта
-from app.rag import RAGService, Document
-from app.ollama_client import OllamaLLM
-from app.chunking.robust_chunker import RobustChunker
+from app.rag import RAGService
 from app.evaluation.logger import RAGEvaluationLogger
 from app.utils.metrics_wrapper import track_latency, track_quality
+from app.monitoring.metrics import get_metrics_instance
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Патч RAGAS Executor для использования правильного размера прогресс-бара
-def patch_ragas_executor():
-    """Патч для класса Executor в RAGAS, чтобы использовать фактическое количество элементов в прогресс-баре."""
-    try:
-        from ragas.executor import Executor
-        
-        # Сохраняем оригинальную функцию results
-        original_results = Executor.results
-        
-        # Создаем новую функцию results с патчем для tqdm
-        @wraps(original_results)
-        def patched_results(self):
-            """
-            Патчим метод results класса Executor, чтобы использовать
-            фактическое количество элементов в прогресс-баре вместо 20.
-            """
-            from ragas.executor import is_event_loop_running, as_completed
-            import asyncio
-            
-            if is_event_loop_running():
-                try:
-                    import nest_asyncio
-                except ImportError:
-                    raise ImportError(
-                        "It seems like your running this in a jupyter-like environment. Please install nest_asyncio with `pip install nest_asyncio` to make it work."
-                    )
-                
-                if not self._nest_asyncio_applied:
-                    nest_asyncio.apply()
-                    self._nest_asyncio_applied = True
-            
-            futures_as_they_finish = as_completed(
-                coros=[afunc(*args, **kwargs) for afunc, args, kwargs, _ in self.jobs],
-                max_workers=(self.run_config or RunConfig()).max_workers,
-            )
-            
-            async def _aresults():
-                results = []
-                for future in tqdm(
-                    await futures_as_they_finish,
-                    desc=self.desc,
-                    total=len(self.jobs),  # Используем фактическое количество задач
-                    leave=self.keep_progress_bar,
-                    disable=not self.show_progress,
-                ):
-                    r = await future
-                    results.append(r)
-                return results
-            
-            results = asyncio.run(_aresults())
-            sorted_results = sorted(results, key=lambda x: x[0])
-            return [r[1] for r in sorted_results]
-        
-        # Заменяем оригинальный метод на наш патч
-        Executor.results = patched_results
-        logger.info("RAGAS Executor успешно патчен для использования правильного размера прогресс-бара")
-        return True
-    except Exception as e:
-        logger.warning(f"Не удалось применить патч к RAGAS Executor: {e}")
-        return False
-
-# Дополнительный патч для функции evaluate, чтобы она использовала правильный прогресс-бар
-def patch_ragas_evaluate():
-    """Патч для функции evaluate в RAGAS, чтобы заменить жестко закодированное значение 20 на фактическое количество элементов."""
-    try:
-        # Импортируем ragas.evaluation, чтобы получить функцию evaluate
-        import ragas.evaluation
-        original_evaluate = ragas.evaluation.evaluate
-        
-        @wraps(original_evaluate)
-        def patched_evaluate(*args, **kwargs):
-            """Патчированная версия функции evaluate с настроенным прогресс-баром."""
-            # Получаем датасет для определения фактического количества элементов
-            dataset = args[0] if args else kwargs.get('dataset')
-            if dataset:
-                logger.info(f"Запуск evaluate с датасетом размером {len(dataset)}")
-                
-                # Обновляем вывод прогресса
-                if "show_progress" not in kwargs:
-                    kwargs["show_progress"] = True
-                
-                # Патчим также настройки run_config
-                if "run_config" not in kwargs:
-                    kwargs["run_config"] = RunConfig()
-            
-            # Вызываем оригинальную функцию с обновленными параметрами
-            return original_evaluate(*args, **kwargs)
-        
-        # Заменяем оригинальную функцию нашей патчированной версией
-        ragas.evaluation.evaluate = patched_evaluate
-        logger.info("RAGAS evaluate успешно патчен для использования правильного размера прогресс-бара")
-        return True
-    except Exception as e:
-        logger.warning(f"Не удалось применить патч к RAGAS evaluate: {e}")
-        return False
-
-def get_builtin_datasets() -> Dict[str, Path]:
-    """
-    Получает или скачивает встроенные датасеты для оценки RAG.
-    
-    Returns:
-        Словарь с путями к файлам датасетов {имя_датасета: путь_к_файлу}
-    """
-    datasets_dir = Path("app/evaluation/datasets")
-    datasets_dir.mkdir(parents=True, exist_ok=True)
-    datasets = {}
-    
-    # SberQuAD
-    sberquad_path = datasets_dir / "sberquad.json"
-    if not sberquad_path.exists():
-        try:
-            logger.info("Downloading SberQuAD dataset...")
-            ds = load_dataset("sberquad", split="validation[:100]")
-            out = []
-            for item in ds:
-                out.append({
-                    "question": item["question"],
-                    "answer": "",
-                    "ground_truth": item["answers"]["text"][0] if item["answers"]["text"] else ""
-                })
-            with open(sberquad_path, "w", encoding="utf-8") as f:
-                json.dump(out, f, ensure_ascii=False, indent=2)
-            logger.info(f"SberQuAD dataset saved to {sberquad_path}")
-        except Exception as e:
-            logger.error(f"Error downloading SberQuAD: {e}")
-    if sberquad_path.exists():
-        datasets["sberquad"] = sberquad_path
-    
-    # RuBQ
-    rubq_path = datasets_dir / "RuBQ.json"
-    if not rubq_path.exists():
-        try:
-            logger.info("Downloading RuBQ dataset...")
-            url = "https://raw.githubusercontent.com/vladislavneon/RuBQ/master/RuBQ_2.0/RuBQ_2.0_test.json"
-            data = requests.get(url, timeout=30).json()
-            out = []
-            for item in data:
-                out.append({
-                    "question": item["question_text"],
-                    "answer": "",
-                    "ground_truth": item["answer_text"]
-                })
-            with open(rubq_path, "w", encoding="utf-8") as f:
-                json.dump(out, f, ensure_ascii=False, indent=2)
-            logger.info(f"RuBQ dataset saved to {rubq_path}")
-        except Exception as e:
-            logger.error(f"Error downloading RuBQ: {e}")
-    if rubq_path.exists():
-        datasets["RuBQ"] = rubq_path
-    
-    return datasets
 
 @track_latency(phase="evaluation")
 class RAGEvaluator:
@@ -231,6 +54,9 @@ class RAGEvaluator:
         self.error_logger = RAGEvaluationLogger(
             log_dir="app/evaluation/error_logs"
         )
+        
+        # Инициализируем систему метрик
+        self.metrics_tracker = get_metrics_instance()
         
         # Загрузка датасета
         self.dataset = self._load_dataset(dataset_file)
@@ -299,6 +125,7 @@ class RAGEvaluator:
             logger.error(f"Error computing answer similarity: {str(e)}")
             return 0.0
     
+    @track_quality(metric_name="context_precision")
     def compute_context_precision(self, retrieved_contexts: List[str], 
                                  relevant_contexts: List[str]) -> float:
         """
@@ -317,6 +144,7 @@ class RAGEvaluator:
         relevant_count = sum(1 for ctx in retrieved_contexts if ctx in relevant_contexts)
         return relevant_count / len(retrieved_contexts)
     
+    @track_quality(metric_name="context_recall")
     def compute_context_recall(self, retrieved_contexts: List[str], 
                               relevant_contexts: List[str]) -> float:
         """
@@ -335,6 +163,7 @@ class RAGEvaluator:
         relevant_count = sum(1 for ctx in retrieved_contexts if ctx in relevant_contexts)
         return relevant_count / len(relevant_contexts)
     
+    @track_latency(phase="evaluation_example")
     def evaluate_example(self, example: Dict[str, Any]) -> Dict[str, Any]:
         """
         Оценивает RAG-систему на одном примере.
@@ -349,10 +178,16 @@ class RAGEvaluator:
         reference_answer = example["answer"]
         relevant_contexts = example.get("relevant_contexts", [])
         
+        # Логируем запрос для отслеживания
+        self.metrics_tracker.record_query(question)
+        
         # Замеряем время поиска
         retrieval_start = time.time()
         retrieved_chunks = self.rag_service.search(question)
         retrieval_time = time.time() - retrieval_start
+        
+        # Записываем метрику времени поиска
+        self.metrics_tracker.record_latency("retrieval", retrieval_time * 1000)
         
         # Для контекстов сохраняем только текст, чтобы их можно было сравнивать
         retrieved_contexts = [chunk.text for chunk, _ in retrieved_chunks]
@@ -363,13 +198,22 @@ class RAGEvaluator:
         answer = self.rag_service.generate_answer(prompt)
         generation_time = time.time() - generation_start
         
+        # Записываем метрику времени генерации
+        self.metrics_tracker.record_latency("generation", generation_time * 1000)
+        
+        # Общее время
+        total_time = retrieval_time + generation_time
+        self.metrics_tracker.record_latency("total", total_time * 1000)
+        
         # Вычисляем метрики
         answer_similarity = self.compute_answer_similarity(answer, reference_answer)
         context_precision = self.compute_context_precision(retrieved_contexts, relevant_contexts)
         context_recall = self.compute_context_recall(retrieved_contexts, relevant_contexts)
         
-        # Общее время
-        total_time = retrieval_time + generation_time
+        # Записываем метрики качества
+        self.metrics_tracker.record_quality("answer_similarity", answer_similarity)
+        self.metrics_tracker.record_quality("context_precision", context_precision)
+        self.metrics_tracker.record_quality("context_recall", context_recall)
         
         # Логируем случаи с низким сходством ответов
         if answer_similarity < self.similarity_threshold:
@@ -385,7 +229,7 @@ class RAGEvaluator:
         
         # Возвращаем результаты
         return {
-                "question": question,
+            "question": question,
             "reference_answer": reference_answer,
             "generated_answer": answer,
             "retrieved_contexts": retrieved_contexts,
@@ -403,7 +247,7 @@ class RAGEvaluator:
     def run_evaluation(self) -> Dict[str, Any]:
         """
         Запускает полную оценку RAG-системы на всем датасете.
-            
+        
         Returns:
             Результаты оценки
         """
@@ -428,7 +272,7 @@ class RAGEvaluator:
                 # Логируем прогресс
                 if (i + 1) % 10 == 0 or (i + 1) == len(self.dataset):
                     logger.info(f"Processed {i + 1}/{len(self.dataset)} examples")
-                
+                    
             except Exception as e:
                 logger.error(f"Error evaluating example {i}: {str(e)}")
         
@@ -471,8 +315,21 @@ class RAGEvaluator:
         error_analysis = self.error_logger.analyze_errors()
         worst_cases = self.error_logger.get_worst_cases(10)
         
+        # Экспортируем анализ ошибок
+        analysis_file = self.error_logger.export_analysis()
+        
         logger.info(f"Error analysis: {len(worst_cases)} worst cases identified")
         logger.info(f"Low similarity percentage: {aggregated_metrics['low_similarity_percentage']:.2f}%")
+        logger.info(f"Error analysis exported to {analysis_file}")
+        
+        # Получаем общую сводку метрик из трекера
+        metrics_summary = self.metrics_tracker.get_metrics_summary()
+        metrics_file = os.path.join(self.output_dir, f"metrics_summary_{timestamp}.json")
+        
+        with open(metrics_file, "w", encoding="utf-8") as f:
+            json.dump(metrics_summary, f, ensure_ascii=False, indent=2)
+            
+        logger.info(f"Metrics summary saved to {metrics_file}")
         
         return aggregated_metrics
 
@@ -480,7 +337,7 @@ def main():
     """
     Основная функция для запуска оценки.
     """
-    parser = argparse.ArgumentParser(description="Evaluate RAG system")
+    parser = argparse.ArgumentParser(description="Evaluate RAG system with improved metrics and error logging")
     parser.add_argument("--dataset", type=str, required=True, help="Path to evaluation dataset")
     parser.add_argument("--output-dir", type=str, default="app/evaluation/results", 
                       help="Directory to save results")
@@ -488,6 +345,8 @@ def main():
                       help="LLM model to use")
     parser.add_argument("--cache-embeddings", action="store_true", 
                       help="Use embedding cache")
+    parser.add_argument("--threshold", type=float, default=0.5,
+                      help="Similarity threshold for error logging")
     args = parser.parse_args()
     
     # Инициализируем RAG-сервис с улучшенными параметрами
@@ -508,7 +367,7 @@ def main():
     from app.ollama_client import OllamaLLM
     ollama_client = OllamaLLM(
         model_name=args.model,
-        temperature=0,  # Низкая температура для более детерминированных ответов
+        temperature=0.1,  # Низкая температура для более детерминированных ответов
         max_tokens=512,  # Ограничиваем длину ответа
         top_p=0.9,
         presence_penalty=0.2
@@ -519,7 +378,8 @@ def main():
     evaluator = RAGEvaluator(
         rag_service=rag_service,
         dataset_file=args.dataset,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        similarity_threshold=args.threshold
     )
     
     # Запускаем оценку
@@ -527,12 +387,13 @@ def main():
     
     # Выводим агрегированные метрики
     print("\nEvaluation Results:")
-    print(f"Answer Similarity: {results['answer_similarity_avg']:.4f}")
+    print(f"Answer Similarity: {results['answer_similarity_avg']:.4f} ± {results['answer_similarity_std']:.4f}")
     print(f"Context Precision: {results['context_precision_avg']:.4f}")
     print(f"Context Recall: {results['context_recall_avg']:.4f}")
     print(f"Retrieval Latency: {results['retrieval_latency_avg']:.2f}s")
     print(f"Generation Latency: {results['generation_latency_avg']:.2f}s")
     print(f"Total Latency: {results['total_latency_avg']:.2f}s")
+    print(f"Low Similarity Cases: {results['low_similarity_percentage']:.2f}%")
 
 if __name__ == "__main__":
-    main()
+    main() 

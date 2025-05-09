@@ -41,7 +41,7 @@ SPACY_MODEL = os.getenv("SPACY_MODEL", "ru_core_news_md")
 
 # Настройки LLM
 LLM_MODEL = os.getenv("LLM_MODEL", "mistral:7b-instruct")
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "512"))
 
 # Настройки адаптивного количества фрагментов

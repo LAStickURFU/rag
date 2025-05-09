@@ -1,14 +1,17 @@
 """
-Модуль для оценки качества RAG-системы.
+Пакет для оценки и анализа RAG-системы.
 
-Содержит инструменты для измерения эффективности различных компонентов RAG:
-- Качество поиска и извлечения релевантных фрагментов
-- Верность ответов LLM предоставленному контексту
-- Релевантность ответов заданным вопросам
-- Общая производительность системы
+Этот пакет содержит модули и методы для оценки эффективности компонентов RAG-системы,
+включая метрики retrieval и answer generation, а также логирование и анализ ошибок.
 """
 
-# Импортируем новый RAGEvaluator из корневого модуля evaluate_rag.py
-from scripts.evaluate_rag import RAGEvaluator
+import os
 
-__all__ = ["RAGEvaluator"] 
+# Создаем необходимые директории
+os.makedirs(os.path.join(os.path.dirname(__file__), "results"), exist_ok=True)
+os.makedirs(os.path.join(os.path.dirname(__file__), "error_logs"), exist_ok=True)
+os.makedirs(os.path.join(os.path.dirname(__file__), "datasets"), exist_ok=True)
+
+from .logger import RAGEvaluationLogger
+
+__all__ = ['RAGEvaluationLogger'] 

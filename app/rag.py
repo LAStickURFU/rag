@@ -305,6 +305,153 @@ class Vectorizer:
         # Векторизация текстов
         return self.model.encode(processed_texts, convert_to_numpy=True)
 
+class VectorizerWithCache:
+    """Класс для векторизации текстовых фрагментов с кэшированием."""
+    
+    def __init__(self, model_name: str = "intfloat/multilingual-e5-large", cache_dir: str = "cache/embeddings"):
+        """
+        Инициализация векторизатора с кэшированием.
+        
+        Args:
+            model_name: Название предобученной модели для векторизации
+            cache_dir: Директория для кэширования эмбеддингов
+        """
+        self.model_name = model_name
+        self.cache_dir = cache_dir
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        # Загружаем модель
+        try:
+            from sentence_transformers import SentenceTransformer
+            self.model = SentenceTransformer(model_name)
+            self.vector_size = self.model.get_sentence_embedding_dimension()
+            self.is_e5_model = "e5" in model_name.lower()
+            logger.info(f"Loaded SentenceTransformer model: {model_name}")
+        except Exception as e:
+            logger.error(f"Error loading SentenceTransformer model: {str(e)}")
+            self.model = None
+            self.is_e5_model = False
+            self.vector_size = 768  # Стандартная размерность для e5-base
+            logger.warning(f"Using mock vectorizer with dimension {self.vector_size}")
+            
+        # Инициализируем кэш
+        self.cache = {}
+        self._load_cache()
+    
+    def _get_cache_path(self, text_hash: str) -> str:
+        """
+        Получает путь для кэширования эмбеддинга.
+        
+        Args:
+            text_hash: Хэш текста
+            
+        Returns:
+            Путь к файлу кэша
+        """
+        return os.path.join(self.cache_dir, f"{text_hash}.npy")
+    
+    def _load_cache(self):
+        """Загружает существующий кэш при инициализации."""
+        try:
+            os.makedirs(self.cache_dir, exist_ok=True)
+            cache_files = os.listdir(self.cache_dir)
+            for cache_file in cache_files:
+                if cache_file.endswith(".npy"):
+                    text_hash = cache_file[:-4]  # Убираем расширение .npy
+                    self.cache[text_hash] = True  # Помечаем как доступный в кэше
+            logger.info(f"Loaded {len(self.cache)} cached embeddings")
+        except Exception as e:
+            logger.warning(f"Error loading embedding cache: {str(e)}")
+    
+    def _get_text_hash(self, text: str) -> str:
+        """
+        Получает хэш текста для кэширования.
+        
+        Args:
+            text: Исходный текст
+            
+        Returns:
+            Хэш текста
+        """
+        import hashlib
+        # Используем MD5 как быстрый хэш для текста
+        return hashlib.md5(text.encode('utf-8')).hexdigest()
+    
+    def encode(self, texts: List[str], use_cache: bool = True) -> np.ndarray:
+        """
+        Преобразует список текстов в их векторные представления с кэшированием.
+        
+        Args:
+            texts: Список текстов для векторизации
+            use_cache: Использовать ли кэширование
+            
+        Returns:
+            Матрица векторных представлений
+        """
+        if self.model is None:
+            # В случае ошибки возвращаем случайные векторы
+            logger.warning("Using random vectors as mock embeddings")
+            return np.random.rand(len(texts), self.vector_size).astype(np.float32)
+        
+        # Проверяем кэш для каждого текста
+        result_vectors = np.zeros((len(texts), self.vector_size), dtype=np.float32)
+        texts_to_encode = []
+        indices_to_encode = []
+        
+        # Если E5 модель, добавляем префикс
+        processed_texts = []
+        for text in texts:
+            if self.is_e5_model:
+                processed_texts.append(f"passage: {text}")
+            else:
+                processed_texts.append(text)
+        
+        for i, text in enumerate(processed_texts):
+            if not use_cache:
+                texts_to_encode.append(text)
+                indices_to_encode.append(i)
+                continue
+                
+            text_hash = self._get_text_hash(text)
+            cache_path = self._get_cache_path(text_hash)
+            
+            if os.path.exists(cache_path):
+                # Загружаем из кэша
+                try:
+                    cached_vector = np.load(cache_path)
+                    result_vectors[i] = cached_vector
+                except Exception as e:
+                    logger.warning(f"Error loading cached embedding: {str(e)}")
+                    texts_to_encode.append(text)
+                    indices_to_encode.append(i)
+            else:
+                texts_to_encode.append(text)
+                indices_to_encode.append(i)
+        
+        # Если есть тексты для кодирования
+        if texts_to_encode:
+            cache_hit_rate = 1.0 - (len(texts_to_encode) / len(texts)) if texts else 0
+            logger.info(f"Encoding {len(texts_to_encode)} texts (cache hit rate: {cache_hit_rate:.2f})")
+            
+            # Векторизуем тексты
+            new_vectors = self.model.encode(texts_to_encode, convert_to_numpy=True)
+            
+            # Сохраняем результаты и кэшируем
+            for idx, (text_idx, text) in enumerate(zip(indices_to_encode, texts_to_encode)):
+                result_vectors[text_idx] = new_vectors[idx]
+                
+                # Кэшируем если нужно
+                if use_cache:
+                    text_hash = self._get_text_hash(text)
+                    cache_path = self._get_cache_path(text_hash)
+                    try:
+                        np.save(cache_path, new_vectors[idx])
+                        self.cache[text_hash] = True
+                    except Exception as e:
+                        logger.warning(f"Error caching embedding: {str(e)}")
+        
+        return result_vectors
+
 # QdrantIndex: drop-in замена ChromaDBIndex, но через Qdrant
 class QdrantIndex:
     def __init__(self, vector_size: int, index_name: str = "default", host: str = "localhost", port: int = 6333):
@@ -458,17 +605,18 @@ class RAGService:
     def __init__(
         self, 
         index_name: str = "default",
-        model_name: str = "intfloat/multilingual-e5-base",
-        chunk_size: int = 400,  # Увеличиваем размер чанка до 400
-        chunk_overlap: int = 100,  # Перекрытие между фрагментами
+        model_name: str = "intfloat/multilingual-e5-large",
+        chunk_size: int = 400,
+        chunk_overlap: int = 200,
         use_hybrid_search: bool = True,
         use_reranker: bool = True,
-        dense_weight: float = 0.7,
-        reranker_weight: float = 0.5,
+        dense_weight: float = 0.6,
+        reranker_weight: float = 0.6,
         use_adaptive_k: bool = True,
-        cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-12-v2",
         language: str = "russian",
-        spacy_model: str = "ru_core_news_md"
+        spacy_model: str = "ru_core_news_md",
+        cache_embeddings: bool = True
     ):
         """
         Инициализация RAG сервиса.
@@ -486,6 +634,7 @@ class RAGService:
             cross_encoder_model: Название модели CrossEncoder
             language: Язык для BM25 и NLTK
             spacy_model: Название модели spaCy для обработки текста
+            cache_embeddings: Использовать ли кэширование эмбеддингов
         """
         self.index_name = index_name
         self.model_name = model_name
@@ -498,6 +647,7 @@ class RAGService:
         self.use_adaptive_k = use_adaptive_k
         self.language = language
         self.spacy_model = spacy_model
+        self.cache_embeddings = cache_embeddings
         
         # Инициализируем улучшенный чанкер с резервными методами
         from app.chunking.robust_chunker import RobustChunker
@@ -508,8 +658,13 @@ class RAGService:
             spacy_model=spacy_model
         )
         
-        # Инициализируем векторизатор для эмбеддингов
-        self.vectorizer = Vectorizer(model_name=model_name)
+        # Инициализируем векторизатор для эмбеддингов - используем кэширующую версию
+        if cache_embeddings:
+            self.vectorizer = VectorizerWithCache(model_name=model_name)
+            logger.info(f"Using vectorizer with caching: {model_name}")
+        else:
+            self.vectorizer = Vectorizer(model_name=model_name)
+            logger.info(f"Using vectorizer without caching: {model_name}")
         
         # Создаем векторный индекс
         vector_size = self.vectorizer.vector_size
@@ -528,7 +683,7 @@ class RAGService:
                     language=language,
                     spacy_model=spacy_model
                 )
-                logger.info("Initialized hybrid retriever with BM25 and dense search (spaCy-only)")
+                logger.info("Initialized hybrid retriever with BM25 and dense search")
             except Exception as e:
                 logger.warning(f"Failed to initialize hybrid retriever: {str(e)}")
                 self.hybrid_retriever = None

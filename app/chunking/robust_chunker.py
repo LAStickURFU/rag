@@ -80,7 +80,7 @@ class RobustChunker:
     
     def __init__(self, 
                 chunk_size: int = 400, 
-                chunk_overlap: int = 100,
+                chunk_overlap: int = 200,
                 language: str = "russian",
                 spacy_model: str = "ru_core_news_md"):
         """
@@ -379,7 +379,7 @@ class RobustChunker:
     
     def _split_with_spacy(self, content: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Разбивает текст на предложения с помощью spaCy.
+        Разбивает текст на предложения с помощью spaCy, сохраняя целостность сущностей.
         
         Args:
             content: Текстовое содержимое
@@ -389,59 +389,211 @@ class RobustChunker:
             Список словарей {text: str, metadata: dict}
         """
         try:
-            # Разбиваем текст на предложения
-            sentences = self.nlp(content).sents
+            # Обрабатываем текст с помощью spaCy для получения сущностей и предложений
+            doc = self.nlp(content)
+            
+            # Находим все именные сущности в документе
+            entities = list(doc.ents)
+            entity_spans = [(e.start_char, e.end_char) for e in entities]
+            
+            # Разбиваем текст на параграфы
+            paragraphs = re.split(r'\n\s*\n', content)
             
             chunks = []
-            current_chunk = ""
+            current_chunk = []
+            current_length = 0
             chunk_id = 0
             
-            for sentence in sentences:
-                # Если текущий chunk + новое предложение не превышает chunk_size,
-                # добавляем предложение к текущему chunk
-                if len(current_chunk) + len(sentence.text) <= self.chunk_size:
-                    current_chunk += sentence.text + " "
+            # Обрабатываем каждый параграф
+            for paragraph in paragraphs:
+                # Обрабатываем параграф с помощью spaCy
+                para_doc = self.nlp(paragraph)
+                
+                # Не разбиваем короткие параграфы
+                if len(paragraph) < self.chunk_size * 0.8:
+                    if current_length + len(paragraph) <= self.chunk_size:
+                        current_chunk.append(paragraph)
+                        current_length += len(paragraph) + 2  # +2 для \n\n
+                    else:
+                        # Добавляем текущий чанк и начинаем новый
+                        chunk_text = "\n\n".join(current_chunk).strip()
+                        chunk_metadata = metadata.copy()
+                        chunk_metadata["chunk_id"] = chunk_id
+                        chunk_metadata["content_type"] = "text"
+                        
+                        chunks.append({
+                            "text": chunk_text,
+                            "metadata": chunk_metadata
+                        })
+                        
+                        # Начинаем новый чанк с перекрытием
+                        overlap_text = chunk_text[-self.chunk_overlap:] if len(chunk_text) > self.chunk_overlap else chunk_text
+                        current_chunk = [overlap_text, paragraph]
+                        current_length = len(overlap_text) + len(paragraph) + 2
+                        chunk_id += 1
                 else:
-                    # Если текущий chunk не пустой, сохраняем его
+                    # Для длинных параграфов обрабатываем их посентенционно, сохраняя сущности
+                    sentences = list(para_doc.sents)
+                    
+                    sentence_groups = []
+                    current_group = []
+                    current_group_length = 0
+                    
+                    for sent in sentences:
+                        sent_text = sent.text
+                        sent_start = sent.start_char
+                        sent_end = sent.end_char
+                        
+                        # Проверяем, пересекается ли предложение с какой-либо сущностью
+                        entity_overlap = False
+                        for start_char, end_char in entity_spans:
+                            # Проверка на пересечение интервалов
+                            if max(sent_start, start_char) < min(sent_end, end_char):
+                                entity_overlap = True
+                                break
+                        
+                        # Если предложение пересекается с сущностью и не первое в группе,
+                        # завершаем текущую группу и начинаем новую
+                        if entity_overlap and current_group and current_group_length + len(sent_text) > self.chunk_size:
+                            sentence_groups.append((current_group, current_group_length))
+                            current_group = []
+                            current_group_length = 0
+                        
+                        # Добавляем предложение в текущую группу
+                        current_group.append(sent_text)
+                        current_group_length += len(sent_text) + 1  # +1 для пробела
+                        
+                        # Если группа достигла максимального размера, завершаем ее
+                        if current_group_length >= self.chunk_size:
+                            sentence_groups.append((current_group, current_group_length))
+                            current_group = []
+                            current_group_length = 0
+                    
+                    # Добавляем последнюю группу предложений
+                    if current_group:
+                        sentence_groups.append((current_group, current_group_length))
+                    
+                    # Обрабатываем группы предложений
+                    for group_sentences, group_length in sentence_groups:
+                        group_text = " ".join(group_sentences)
+                        
+                        if current_length + group_length <= self.chunk_size:
+                            current_chunk.append(group_text)
+                            current_length += group_length + 2  # +2 для \n\n
+                        else:
+                            # Создаем чанк из текущего буфера
+                            chunk_text = "\n\n".join(current_chunk).strip()
+                            chunk_metadata = metadata.copy()
+                            chunk_metadata["chunk_id"] = chunk_id
+                            chunk_metadata["content_type"] = "text"
+                            
+                            chunks.append({
+                                "text": chunk_text,
+                                "metadata": chunk_metadata
+                            })
+                            
+                            # Начинаем новый чанк с перекрытием
+                            overlap_text = chunk_text[-self.chunk_overlap:] if len(chunk_text) > self.chunk_overlap else chunk_text
+                            current_chunk = [overlap_text, group_text]
+                            current_length = len(overlap_text) + group_length + 2
+                            chunk_id += 1
+            
+            # Добавляем последний чанк
+            if current_chunk:
+                chunk_text = "\n\n".join(current_chunk).strip()
+                chunk_metadata = metadata.copy()
+                chunk_metadata["chunk_id"] = chunk_id
+                chunk_metadata["content_type"] = "text"
+                
+                chunks.append({
+                    "text": chunk_text,
+                    "metadata": chunk_metadata
+                })
+            
+            return chunks
+        except Exception as e:
+            logger.error(f"Advanced spaCy splitting error: {str(e)}")
+            logger.error(traceback.format_exc())
+            # Фолбэк на простой метод
+            return self._split_text_simple(content, metadata)
+    
+    def _split_text_simple(self, content: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Простое резервное разбиение текста на чанки, если продвинутый метод не работает.
+        
+        Args:
+            content: Текстовое содержимое
+            metadata: Метаданные документа
+            
+        Returns:
+            Список словарей {text: str, metadata: dict}
+        """
+        chunks = []
+        chunk_id = 0
+        
+        # Разбиваем текст на параграфы
+        paragraphs = re.split(r'\n\s*\n', content)
+        
+        current_chunk = ""
+        for paragraph in paragraphs:
+            # Если параграф слишком большой, разбиваем на предложения
+            if len(paragraph) > self.chunk_size:
+                sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+                for sentence in sentences:
+                    if len(current_chunk) + len(sentence) <= self.chunk_size:
+                        current_chunk += (sentence + " ")
+                    else:
+                        if current_chunk:
+                            chunk_metadata = metadata.copy()
+                            chunk_metadata["chunk_id"] = chunk_id
+                            chunk_metadata["content_type"] = "text"
+                            chunk_metadata["simple_fallback"] = True
+                            
+                            chunks.append({
+                                "text": current_chunk.strip(),
+                                "metadata": chunk_metadata
+                            })
+                            
+                            # Добавляем перекрытие
+                            overlap_size = min(len(current_chunk), self.chunk_overlap)
+                            current_chunk = current_chunk[-overlap_size:] if overlap_size > 0 else ""
+                            current_chunk += sentence + " "
+                            chunk_id += 1
+            else:
+                if len(current_chunk) + len(paragraph) <= self.chunk_size:
+                    current_chunk += (paragraph + "\n\n")
+                else:
                     if current_chunk:
                         chunk_metadata = metadata.copy()
                         chunk_metadata["chunk_id"] = chunk_id
                         chunk_metadata["content_type"] = "text"
-                        chunk_metadata["spacy_fallback"] = True
+                        chunk_metadata["simple_fallback"] = True
                         
                         chunks.append({
                             "text": current_chunk.strip(),
                             "metadata": chunk_metadata
                         })
                         
-                        chunk_id += 1
-                    
-                    # Начинаем новый chunk
-                    overlap_chars = min(len(current_chunk), self.chunk_overlap)
-                    if overlap_chars > 0:
                         # Добавляем перекрытие
-                        current_chunk = current_chunk[-overlap_chars:] + sentence.text + " "
-                    else:
-                        current_chunk = sentence.text + " "
+                        overlap_size = min(len(current_chunk), self.chunk_overlap)
+                        current_chunk = current_chunk[-overlap_size:] if overlap_size > 0 else ""
+                        current_chunk += paragraph + "\n\n"
+                        chunk_id += 1
+        
+        # Добавляем последний чанк
+        if current_chunk:
+            chunk_metadata = metadata.copy()
+            chunk_metadata["chunk_id"] = chunk_id
+            chunk_metadata["content_type"] = "text"
+            chunk_metadata["simple_fallback"] = True
             
-            # Не забываем добавить последний chunk
-            if current_chunk:
-                chunk_metadata = metadata.copy()
-                chunk_metadata["chunk_id"] = chunk_id
-                chunk_metadata["content_type"] = "text"
-                chunk_metadata["spacy_fallback"] = True
-                
-                chunks.append({
-                    "text": current_chunk.strip(),
-                    "metadata": chunk_metadata
-                })
-            
-            return chunks
-        except Exception as e:
-            logger.error(f"spaCy splitting error: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
-    
+            chunks.append({
+                "text": current_chunk.strip(),
+                "metadata": chunk_metadata
+            })
+        
+        return chunks
+
     def split_text(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
         Умное разбиение текста на фрагменты с механизмами резервирования.
@@ -459,8 +611,10 @@ class RobustChunker:
         
         # Используем специализированные методы разбиения для разных типов контента
         try:
-            # Выбираем метод разбиения в зависимости от типа контента
-            if content_type == "json":
+            # Для обычного текста и markdown используем наш улучшенный алгоритм с spaCy
+            if content_type in ["text", "markdown"]:
+                return self._split_with_spacy(text, metadata)
+            elif content_type == "json":
                 return self._split_json(text, metadata)
             elif content_type == "csv":
                 return self._split_csv(text, metadata)
@@ -498,33 +652,8 @@ class RobustChunker:
             
         except Exception as e:
             logger.warning(f"Primary chunking method failed: {str(e)}")
-            
-            # Перебираем резервные методы
-            for method in ["spacy"]:
-                try:
-                    logger.info(f"Trying fallback chunking method: {method}")
-                    
-                    if method == "spacy":
-                        return self._split_with_spacy(text, metadata)
-                    else:
-                        logger.warning(f"Unknown fallback method: {method}")
-                        continue
-                        
-                except Exception as e:
-                    logger.warning(f"Fallback method {method} failed: {str(e)}")
-                    continue
-            
-            # Если все методы не сработали, возвращаем один большой фрагмент
-            logger.warning("All chunking methods failed. Returning a single chunk.")
-            
-            metadata["chunk_id"] = 0
-            metadata["content_type"] = content_type
-            metadata["emergency_fallback"] = True
-            
-            return [{
-                "text": text,
-                "metadata": metadata
-            }]
+            # Используем резервный метод разбиения в случае ошибки
+            return self._split_text_simple(text, metadata)
     
     def create_chunks_from_document(self, document: Document, doc_id: str) -> List[Chunk]:
         """
