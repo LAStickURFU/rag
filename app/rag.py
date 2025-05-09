@@ -621,13 +621,13 @@ class RAGService:
         
         Args:
             query: Текст запроса
-            top_k_chunks: Количество фрагментов для включения в промпт
+            top_k_chunks: Максимальное количество фрагментов для включения в промпт
             
         Returns:
             Промпт для LLM
         """
-        # Получаем релевантные фрагменты
-        relevant_chunks = self.search(query, top_k=top_k_chunks)
+        # Запрашиваем больше чанков для последующей фильтрации
+        relevant_chunks = self.search(query, top_k=top_k_chunks * 2)
         
         if not relevant_chunks:
             # Если нет релевантных фрагментов, возвращаем промпт с уведомлением
@@ -640,9 +640,24 @@ class RAGService:
 
 ОТВЕТ:"""
         
+        # Фильтруем низко-релевантные фрагменты
+        MIN_SCORE_THRESHOLD = 0.45  # Минимальный порог релевантности
+        filtered_chunks = [(chunk, score) for chunk, score in relevant_chunks if score >= MIN_SCORE_THRESHOLD]
+        
+        # Если после фильтрации осталось меньше минимального числа фрагментов, берем лучшие
+        top_k_min = 2
+        if len(filtered_chunks) < top_k_min:
+            filtered_chunks = relevant_chunks[:top_k_min]
+        
+        # Ограничиваем максимальное количество фрагментов
+        filtered_chunks = filtered_chunks[:top_k_chunks]
+        
+        # Сортируем фрагменты по релевантности перед формированием контекста
+        filtered_chunks.sort(key=lambda x: x[1], reverse=True)
+        
         # Формируем контекст из фрагментов
         context_parts = []
-        for i, (chunk, score) in enumerate(relevant_chunks):
+        for i, (chunk, score) in enumerate(filtered_chunks):
             # Добавляем идентификатор фрагмента и оценку релевантности
             chunk_info = f"[Фрагмент {i+1}, релевантность: {score:.2f}]"
             
@@ -667,22 +682,85 @@ class RAGService:
         # Объединяем части контекста с разделителями
         context = "\n\n".join(context_parts)
         
-        # Улучшенный шаблон промпта
+        # Определяем тип вопроса для оптимизации формата ответа
+        question_type = self._detect_question_type(query)
+        
+        # Дополнительные инструкции на основе типа вопроса
+        type_specific_instructions = ""
+        if question_type == "factoid":
+            type_specific_instructions = "Дай ТОЛЬКО конкретный факт, без вводных фраз и объяснений. Одно предложение максимум."
+        elif question_type == "date":
+            type_specific_instructions = "Укажи ТОЛЬКО дату или временной период, без лишних слов."
+        elif question_type == "person":
+            type_specific_instructions = "Укажи ТОЛЬКО имя человека или организации в ответе, без дополнительных комментариев."
+        elif question_type == "definition":
+            type_specific_instructions = "Дай краткое и точное определение, не более 1-2 предложений."
+        
+        # Улучшенный шаблон промпта для максимизации метрики answer_similarity
         prompt_template = f"""Ты - русскоязычный ассистент, специализирующийся на предоставлении точной информации на основе контекста.
 
 ИНСТРУКЦИИ:
 1. Используй ТОЛЬКО информацию из предоставленных фрагментов документов.
-2. Отвечай ИСКЛЮЧИТЕЛЬНО на русском языке, с правильной грамматикой и пунктуацией.
-3. Если информации недостаточно или она отсутствует в контексте, честно признай это.
-4. Не используй внешние знания или предположения, не основанные на контексте.
-5. Стремись к точности и краткости, избегая повторов.
-6. Не упоминай в ответе номера или идентификаторы фрагментов.
+2. Дай КРАТКИЙ и ТОЧНЫЙ ответ на вопрос, основанный строго на предоставленном контексте.
+3. {type_specific_instructions or "Если вопрос требует конкретного факта (имя, дата, число), приведи ТОЛЬКО этот факт без лишних слов."}
+4. НЕ используй вводные фразы типа "Согласно контексту" или "На основе предоставленной информации".
+5. Если информации недостаточно, кратко укажи на это, не придумывая никаких деталей.
+6. Отвечай точными формулировками из контекста, когда это возможно.
+7. Избегай обобщений, придерживайся конкретных фактов из контекста.
+8. Если разные фрагменты противоречат друг другу, укажи это и приведи оба варианта.
+9. НЕ упоминай номера фрагментов или их метаданные в своем ответе.
 
 КОНТЕКСТ:
 {context}
 
 ВОПРОС: {query}
 
-ОТВЕТ:"""
+КРАТКИЙ ОТВЕТ:"""
         
-        return prompt_template 
+        return prompt_template
+        
+    def _detect_question_type(self, query: str) -> str:
+        """
+        Определяет тип вопроса для оптимизации ответа.
+        
+        Args:
+            query: Текст запроса
+            
+        Returns:
+            Тип вопроса (factoid, date, person, definition, general)
+        """
+        # Приводим к нижнему регистру для анализа
+        query_lower = query.lower()
+        
+        # Проверяем на factoid-вопросы (конкретные факты)
+        factoid_patterns = ["что такое", "что представляет собой", "что означает", 
+                           "что является", "какой", "сколько", "где находится"]
+        
+        # Проверяем на вопросы о датах
+        date_patterns = ["когда", "в каком году", "в каком месяце", "дата", "период"]
+        
+        # Проверяем на вопросы о персонах
+        person_patterns = ["кто", "чье имя", "какой человек", "какая организация"]
+        
+        # Проверяем на запросы определений
+        definition_patterns = ["что такое", "определение", "термин", "определить", "что означает"]
+        
+        # Проверяем паттерны
+        for pattern in factoid_patterns:
+            if pattern in query_lower:
+                return "factoid"
+                
+        for pattern in date_patterns:
+            if pattern in query_lower:
+                return "date"
+                
+        for pattern in person_patterns:
+            if pattern in query_lower:
+                return "person"
+                
+        for pattern in definition_patterns:
+            if pattern in query_lower:
+                return "definition"
+                
+        # По умолчанию - общий вопрос
+        return "general" 

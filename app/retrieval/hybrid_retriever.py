@@ -25,8 +25,8 @@ class HybridRetriever:
     """
     
     def __init__(self, 
-                dense_weight: float = 0.7, 
-                reranker_weight: float = 0.5,
+                dense_weight: float = 0.6,  # Снижено с 0.7 для большего влияния BM25
+                reranker_weight: float = 0.6,  # Увеличено с 0.5 для усиления влияния reranker
                 use_reranker: bool = True,
                 use_adaptive_k: bool = True,
                 cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
@@ -126,26 +126,47 @@ class HybridRetriever:
         
         if len(sorted_scores) <= min_k:
             return len(sorted_scores)
-            
-        # Находим точку, где производная резко падает (метод локтя)
-        derivatives = []
+        
+        # Вычисляем относительное падение score
+        relative_drops = []
         for i in range(1, len(sorted_scores)):
-            derivatives.append(sorted_scores[i-1] - sorted_scores[i])
+            if sorted_scores[i-1] > 0:
+                relative_drop = (sorted_scores[i-1] - sorted_scores[i]) / sorted_scores[i-1]
+                relative_drops.append((i, relative_drop))
         
-        # Находим индекс максимального падения после min_k
-        max_drop_idx = min_k
-        max_drop = 0
-        for i in range(min_k, min(len(derivatives), max_k)):
-            if derivatives[i] > max_drop:
-                max_drop = derivatives[i]
-                max_drop_idx = i
+        # Если нет падений или слишком мало результатов, возвращаем минимум
+        if not relative_drops:
+            return min(min_k, len(sorted_scores))
         
-        # Проверяем, значимое ли падение
-        if max_drop > 0.05:  # Порог значимости
-            return max_drop_idx + 1
+        # Находим значительные падения после min_k
+        significant_drops = [(i, drop) for i, drop in relative_drops if drop > 0.15 and i >= min_k]
+        
+        if significant_drops:
+            # Берем первое значительное падение
+            return significant_drops[0][0]
         else:
-            # Если нет значимого падения, возвращаем среднее между min_k и max_k
-            return (min_k + max_k) // 2
+            # Если нет значительных падений, смотрим, какой минимальный score приемлем
+            # Берем все документы со score не менее 50% от максимального
+            threshold = sorted_scores[0] * 0.5
+            for i, score in enumerate(sorted_scores):
+                if score < threshold:
+                    return max(min_k, i)
+                    
+            # Если все документы выше порога, берем все (не больше max_k)
+            return min(len(sorted_scores), max_k)
+    
+    def _rrf_score(self, rank: int, k: int = 60) -> float:
+        """
+        Вычисляет Reciprocal Rank Fusion (RRF) score.
+        
+        Args:
+            rank: Ранг документа
+            k: Константа для RRF (обычно 60)
+            
+        Returns:
+            RRF score
+        """
+        return 1.0 / (k + rank)
     
     def search(self, query: str, dense_results: List[Tuple[Any, float]], 
               top_k: int = 5) -> List[Tuple[Any, float]]:
@@ -163,25 +184,40 @@ class HybridRetriever:
         chunks = [chunk for chunk, _ in dense_results]
         dense_scores = [score for _, score in dense_results]
         
-        # Получаем результаты BM25
-        bm25_results = self.bm25.search(query, top_k=top_k)
+        # Получаем результаты BM25 с увеличенным количеством кандидатов
+        bm25_results = self.bm25.search(query, top_k=top_k*2)
         
         # Нормализуем scores
         norm_dense_scores = self._normalize_scores([(i, score) for i, score in enumerate(dense_scores)])
         norm_bm25_scores = self._normalize_scores(bm25_results)
         
-        # Создаем словари для быстрого доступа
-        dense_score_dict = {idx: score for idx, score in norm_dense_scores}
-        bm25_score_dict = {idx: score for idx, score in norm_bm25_scores}
+        # Преобразуем нормализованные scores в ранги для Reciprocal Rank Fusion
+        dense_ranks = {}
+        bm25_ranks = {}
         
-        # Объединяем результаты с взвешиванием
+        # Сортируем по убыванию score и присваиваем ранги
+        sorted_dense = sorted(norm_dense_scores, key=lambda x: x[1], reverse=True)
+        sorted_bm25 = sorted(norm_bm25_scores, key=lambda x: x[1], reverse=True)
+        
+        for i, (idx, _) in enumerate(sorted_dense):
+            dense_ranks[idx] = i + 1  # Ранги начинаются с 1
+            
+        for i, (idx, _) in enumerate(sorted_bm25):
+            bm25_ranks[idx] = i + 1  # Ранги начинаются с 1
+        
+        # Объединяем результаты с использованием Reciprocal Rank Fusion
         hybrid_scores = []
         for i, chunk in enumerate(chunks):
-            dense_score = dense_score_dict.get(i, 0.0)
-            bm25_score = bm25_score_dict.get(i, 0.0)
+            # Получаем ранги (если документ не найден, используем максимальный ранг + 1)
+            dense_rank = dense_ranks.get(i, len(chunks) + 1)
+            bm25_rank = bm25_ranks.get(i, len(chunks) + 1)
             
-            # Взвешенная сумма
-            hybrid_score = self.dense_weight * dense_score + (1 - self.dense_weight) * bm25_score
+            # Вычисляем RRF scores
+            rrf_dense = self._rrf_score(dense_rank)
+            rrf_bm25 = self._rrf_score(bm25_rank)
+            
+            # Взвешенная сумма RRF scores
+            hybrid_score = self.dense_weight * rrf_dense + (1 - self.dense_weight) * rrf_bm25
             hybrid_scores.append((i, hybrid_score))
         
         # Сортируем по убыванию score
@@ -204,9 +240,17 @@ class HybridRetriever:
         final_results = []
         if self.use_reranker and self.reranker and self.reranker.is_available():
             try:
-                # Переранжируем с учетом оригинальных scores
+                # Анализируем разброс scores в предварительных результатах
+                score_range = max(top_scores) - min(top_scores) if top_scores else 0
+                
+                # Если разброс высокий, значит есть четкое разделение по релевантности
+                # и CrossEncoder может быть более полезен
+                dynamic_weight = min(0.8, self.reranker_weight + (score_range * 0.3))
+                logger.info(f"Using dynamic reranker weight: {dynamic_weight:.2f}")
+                
+                # Переранжируем с учетом оригинальных scores и динамического веса
                 reranker_results = self.reranker.rerank_with_original_weights(
-                    query, top_chunk_texts, top_scores, weight=self.reranker_weight
+                    query, top_chunk_texts, top_scores, weight=dynamic_weight
                 )
                 
                 # Формируем окончательные результаты

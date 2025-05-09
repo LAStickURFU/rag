@@ -22,7 +22,7 @@ class CrossEncoderReranker:
     между запросом и документом, что обеспечивает более точные результаты.
     """
     
-    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
+    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"):  # L-12 вместо L-6
         """
         Инициализация CrossEncoder.
         
@@ -43,18 +43,31 @@ class CrossEncoderReranker:
             # Переводим модель в режим инференса
             self.model.eval()
             
+            # Оптимизация для инференса
+            if torch.cuda.is_available():
+                # Используем оптимизации для ускорения инференса
+                if hasattr(torch.cuda, 'amp') and hasattr(torch.cuda.amp, 'autocast'):
+                    self.use_amp = True
+                    logger.info("Используем mixed precision для CrossEncoder")
+                else:
+                    self.use_amp = False
+            else:
+                self.use_amp = False
+            
             logger.info(f"Initialized CrossEncoder model: {model_name} on {self.device}")
         except Exception as e:
             logger.error(f"Failed to load CrossEncoder model: {str(e)}")
             # В случае ошибки создаем заглушку
             self.model = None
             self.tokenizer = None
+            self.use_amp = False
     
     def is_available(self) -> bool:
         """Проверяет, успешно ли загружена модель."""
         return self.model is not None and self.tokenizer is not None
     
-    def rerank(self, query: str, documents: List[str], scores: Optional[List[float]] = None) -> List[Tuple[int, float]]:
+    def rerank(self, query: str, documents: List[str], scores: Optional[List[float]] = None, 
+              batch_size: int = 8) -> List[Tuple[int, float]]:
         """
         Переранжирование результатов поиска.
         
@@ -62,6 +75,7 @@ class CrossEncoderReranker:
             query: Текст запроса
             documents: Список текстов документов для ранжирования
             scores: Опциональный список начальных scores (например, от BM25)
+            batch_size: Размер батча для обработки
             
         Returns:
             Список кортежей (индекс документа, score)
@@ -79,18 +93,29 @@ class CrossEncoderReranker:
         pairs = [(query, doc) for doc in documents]
         
         try:
-            # Токенизация с паддингом и трункацией
-            with torch.no_grad():
+            # Инициализация результатов
+            all_scores = []
+            
+            # Обработка по батчам для более эффективного использования GPU
+            for i in range(0, len(pairs), batch_size):
+                batch_pairs = pairs[i:i+batch_size]
+                
+                # Токенизация с паддингом и трункацией
                 inputs = self.tokenizer(
-                    pairs, 
+                    batch_pairs, 
                     padding=True, 
                     truncation=True, 
                     return_tensors="pt",
                     max_length=512
                 ).to(self.device)
                 
-                # Получаем предсказания модели
-                outputs = self.model(**inputs)
+                # Получаем предсказания модели с поддержкой mixed precision
+                with torch.no_grad():
+                    if self.use_amp:
+                        with torch.cuda.amp.autocast():
+                            outputs = self.model(**inputs)
+                    else:
+                        outputs = self.model(**inputs)
                 
                 # Извлекаем scores
                 if isinstance(outputs, tuple):
@@ -100,18 +125,28 @@ class CrossEncoderReranker:
                 
                 # Берем только score для положительного класса (релевантности)
                 if logits.shape[1] > 1:  # Если модель имеет несколько выходов
-                    scores = logits[:, 1].cpu().numpy()  # Берем вероятность релевантности
+                    batch_scores = logits[:, 1].cpu().numpy()  # Берем вероятность релевантности
                 else:
-                    scores = logits.squeeze(-1).cpu().numpy()
+                    batch_scores = logits.squeeze(-1).cpu().numpy()
                 
-                # Создаем список (индекс, score)
-                ranked = [(i, float(score)) for i, score in enumerate(scores)]
-                
-                # Сортируем по убыванию score
-                ranked.sort(key=lambda x: x[1], reverse=True)
-                
-                return ranked
-                
+                # Добавляем в общий список
+                all_scores.extend(batch_scores)
+            
+            # Создаем список (индекс, score)
+            ranked = [(i, float(score)) for i, score in enumerate(all_scores)]
+            
+            # Сортируем по убыванию score
+            ranked.sort(key=lambda x: x[1], reverse=True)
+            
+            # Логируем информацию о ранжировании для отладки
+            if len(ranked) > 0:
+                max_score = max(score for _, score in ranked)
+                min_score = min(score for _, score in ranked)
+                avg_score = sum(score for _, score in ranked) / len(ranked)
+                logger.debug(f"CrossEncoder scores - Max: {max_score:.4f}, Min: {min_score:.4f}, Avg: {avg_score:.4f}")
+            
+            return ranked
+        
         except Exception as e:
             logger.error(f"Error during CrossEncoder ranking: {str(e)}")
             
@@ -123,7 +158,8 @@ class CrossEncoderReranker:
     
     def rerank_with_original_weights(self, query: str, documents: List[str], 
                                     original_scores: List[float], 
-                                    weight: float = 0.5) -> List[Tuple[int, float]]:
+                                    weight: float = 0.5,
+                                    batch_size: int = 8) -> List[Tuple[int, float]]:
         """
         Переранжирование с учетом оригинальных весов и весов CrossEncoder.
         
@@ -132,6 +168,7 @@ class CrossEncoderReranker:
             documents: Список текстов документов для ранжирования
             original_scores: Список начальных scores (например, от BM25 или dense retrieval)
             weight: Вес CrossEncoder в финальном score (от 0 до 1)
+            batch_size: Размер батча для обработки
             
         Returns:
             Список кортежей (индекс документа, score)
@@ -140,7 +177,7 @@ class CrossEncoderReranker:
         assert len(documents) == len(original_scores), "Number of documents and scores must match"
         
         # Получаем scores от CrossEncoder
-        cross_encoder_results = self.rerank(query, documents)
+        cross_encoder_results = self.rerank(query, documents, batch_size=batch_size)
         
         # Нормализуем CrossEncoder scores
         if cross_encoder_results:
@@ -152,7 +189,10 @@ class CrossEncoderReranker:
             ce_scores = {}
             for idx, score in cross_encoder_results:
                 if range_ce > 0:
-                    ce_scores[idx] = (score - min_ce_score) / range_ce
+                    # Применяем нелинейную функцию для усиления больших значений
+                    normalized_score = (score - min_ce_score) / range_ce
+                    # Опционально: усиливаем высокие значения через квадратичную функцию
+                    ce_scores[idx] = normalized_score ** 2 if normalized_score > 0.7 else normalized_score
                 else:
                     ce_scores[idx] = 1.0
         else:
@@ -176,8 +216,13 @@ class CrossEncoderReranker:
             orig_score = norm_orig_scores[i]
             ce_score = ce_scores.get(i, 0.0)
             
-            # Взвешенная сумма
+            # Взвешенная сумма с потенциальным усилением для очень релевантных документов
             combined_score = (1 - weight) * orig_score + weight * ce_score
+            
+            # Дополнительный бонус для документов с очень высоким score по обоим метрикам
+            if orig_score > 0.8 and ce_score > 0.8:
+                combined_score += 0.1  # Бонус для очень уверенных совпадений
+                
             combined_scores.append((i, combined_score))
         
         # Сортируем по убыванию

@@ -275,15 +275,24 @@ class OllamaLLM:
         retry_count = 0
         last_error = None
         
+        # Определяем, является ли промпт русскоязычным для специфичных настроек
+        is_russian = True if "русск" in prompt.lower() or "КРАТКИЙ ОТВЕТ:" in prompt else False
+        
         while retry_count < max_retries:
             try:
-                # Формируем параметры из kwargs с установкой temperature=0 по умолчанию
+                # Оптимизированные параметры генерации для высокой answer_similarity
                 options = {
-                    'temperature': 0.0,  # Устанавливаем temperature=0 по умолчанию (детерминированные ответы)
-                    'num_predict': 1024,  # Ограничиваем максимальное количество токенов для генерации
-                    'top_p': 0.9,         # Ограничиваем сэмплирование верхними 90% вероятностей
-                    'stop': ['<|im_end|>', '</answer>', '\n\n']  # Останавливаем генерацию при этих токенах
+                    'temperature': 0.1,     # Близко к 0, но не точно 0, для небольшой вариативности
+                    'num_predict': 512,     # Меньший лимит токенов для более кратких ответов
+                    'top_p': 0.95,          # Немного выше для учета большего числа вероятностей
+                    'top_k': 40,            # Ограничиваем список кандидатов для каждого токена
+                    'stop': ['<|im_end|>', '</answer>', '\n\n', '\nВОПРОС:', 'ВОПРОС:']  # Расширенный список стоп-токенов
                 }
+                
+                # Специальные настройки для русского языка
+                if is_russian:
+                    options['repeat_penalty'] = 1.15  # Немного выше для русского
+                    options['frequency_penalty'] = 0.05  # Предотвращение повторов в русском
                 
                 # Извлекаем поддерживаемые параметры
                 if 'temperature' in kwargs:
@@ -294,26 +303,22 @@ class OllamaLLM:
                     options['num_predict'] = int(kwargs.pop('num_predict'))
                 if 'stop' in kwargs and isinstance(kwargs['stop'], list):
                     options['stop'] = kwargs.pop('stop')
+                if 'top_k' in kwargs:
+                    options['top_k'] = int(kwargs.pop('top_k'))
+                if 'repeat_penalty' in kwargs:
+                    options['repeat_penalty'] = float(kwargs.pop('repeat_penalty'))
+                if 'frequency_penalty' in kwargs:
+                    options['frequency_penalty'] = float(kwargs.pop('frequency_penalty'))
                 
                 logger.info(f"Generating response with model {self.model_name}, options: {options}")
                 
-                # Очищаем параметры, которые могут вызвать ошибки
-                if len(options) == 1 and 'temperature' in options and options['temperature'] == 0.0:
-                    # Вызываем генерацию с temperature=0
-                    response = await self.async_client.generate(
-                        model=self.model_name,
-                        prompt=prompt,
-                        options={'temperature': 0.0},
-                        stream=False
-                    )
-                else:
-                    # Вызываем генерацию с указанными параметрами
-                    response = await self.async_client.generate(
-                        model=self.model_name,
-                        prompt=prompt,
-                        options=options,
-                        stream=False
-                    )
+                # Вызываем генерацию с указанными параметрами
+                response = await self.async_client.generate(
+                    model=self.model_name,
+                    prompt=prompt,
+                    options=options,
+                    stream=False
+                )
                 
                 # Упрощенная логика обработки ответа от Ollama:
                 # 1. Если ответ - словарь и в нем есть ключ 'response', извлекаем его
@@ -342,7 +347,10 @@ class OllamaLLM:
                     last_error = "пустой ответ от модели"
                     await asyncio.sleep(1)
                     continue
-                    
+                
+                # Постобработка ответа для улучшения answer_similarity
+                response_text = self._postprocess_response(response_text)
+                
                 return response_text
             
             except Exception as e:
@@ -403,15 +411,24 @@ class OllamaLLM:
         retry_count = 0
         last_error = None
         
+        # Определяем, является ли промпт русскоязычным для специфичных настроек
+        is_russian = True if "русск" in prompt.lower() or "КРАТКИЙ ОТВЕТ:" in prompt else False
+        
         while retry_count < max_retries:
             try:
-                # Формируем параметры из kwargs с установкой temperature=0 по умолчанию
+                # Оптимизированные параметры генерации для высокой answer_similarity
                 options = {
-                    'temperature': 0.0,  # Устанавливаем temperature=0 по умолчанию (детерминированные ответы)
-                    'num_predict': 1024,  # Ограничиваем максимальное количество токенов для генерации
-                    'top_p': 0.9,         # Ограничиваем сэмплирование верхними 90% вероятностей
-                    'stop': ['<|im_end|>', '</answer>', '\n\n']  # Останавливаем генерацию при этих токенах
+                    'temperature': 0.1,     # Близко к 0, но не точно 0, для небольшой вариативности
+                    'num_predict': 512,     # Меньший лимит токенов для более кратких ответов
+                    'top_p': 0.95,          # Немного выше для учета большего числа вероятностей
+                    'top_k': 40,            # Ограничиваем список кандидатов для каждого токена
+                    'stop': ['<|im_end|>', '</answer>', '\n\n', '\nВОПРОС:', 'ВОПРОС:']  # Расширенный список стоп-токенов
                 }
+                
+                # Специальные настройки для русского языка
+                if is_russian:
+                    options['repeat_penalty'] = 1.15  # Немного выше для русского
+                    options['frequency_penalty'] = 0.05  # Предотвращение повторов в русском
                 
                 # Извлекаем поддерживаемые параметры
                 if 'temperature' in kwargs:
@@ -422,26 +439,22 @@ class OllamaLLM:
                     options['num_predict'] = int(kwargs.pop('num_predict'))
                 if 'stop' in kwargs and isinstance(kwargs['stop'], list):
                     options['stop'] = kwargs.pop('stop')
+                if 'top_k' in kwargs:
+                    options['top_k'] = int(kwargs.pop('top_k'))
+                if 'repeat_penalty' in kwargs:
+                    options['repeat_penalty'] = float(kwargs.pop('repeat_penalty'))
+                if 'frequency_penalty' in kwargs:
+                    options['frequency_penalty'] = float(kwargs.pop('frequency_penalty'))
                 
                 logger.info(f"Generating response with model {self.model_name}, options: {options}")
                 
-                # Очищаем параметры, которые могут вызвать ошибки
-                if len(options) == 1 and 'temperature' in options and options['temperature'] == 0.0:
-                    # Вызываем генерацию с temperature=0
-                    response = self.client.generate(
-                        model=self.model_name,
-                        prompt=prompt,
-                        options={'temperature': 0.0},
-                        stream=False
-                    )
-                else:
-                    # Вызываем генерацию с указанными параметрами
-                    response = self.client.generate(
-                        model=self.model_name,
-                        prompt=prompt,
-                        options=options,
-                        stream=False
-                    )
+                # Вызываем генерацию с указанными параметрами
+                response = self.client.generate(
+                    model=self.model_name,
+                    prompt=prompt,
+                    options=options,
+                    stream=False
+                )
                 
                 # Упрощенная логика обработки ответа от Ollama:
                 # 1. Если ответ - словарь и в нем есть ключ 'response', извлекаем его
@@ -470,7 +483,10 @@ class OllamaLLM:
                     last_error = "пустой ответ от модели"
                     time.sleep(1)
                     continue
-                    
+                
+                # Постобработка ответа для улучшения answer_similarity
+                response_text = self._postprocess_response(response_text)
+                
                 return response_text
                 
             except Exception as e:
@@ -491,6 +507,59 @@ class OllamaLLM:
         
         # Если все попытки неудачны, возвращаем ошибку
         return f"Ошибка генерации ответа: {last_error}"
+    
+    def _postprocess_response(self, response: str) -> str:
+        """
+        Постобработка ответа для улучшения метрики answer_similarity.
+        
+        Args:
+            response: Исходный ответ модели
+            
+        Returns:
+            Обработанный ответ
+        """
+        # Убираем вводные фразы, которые могут снизить metрику answer_similarity
+        intro_phrases = [
+            "Согласно предоставленному контексту,",
+            "На основе предоставленной информации,",
+            "Из контекста следует, что",
+            "В соответствии с предоставленными данными,",
+            "Судя по контексту,",
+            "Как указано в контексте,",
+            "Информация в контексте указывает, что",
+            "Контекст свидетельствует о том, что",
+            "Согласно информации,",
+            "По имеющейся информации,",
+            "Исходя из предоставленных материалов,"
+        ]
+        
+        # Удаляем вводные фразы в начале ответа
+        processed_response = response
+        for phrase in intro_phrases:
+            if processed_response.startswith(phrase):
+                processed_response = processed_response[len(phrase):].lstrip()
+                # После удаления одной фразы прекращаем, чтобы не удалить часть ответа
+                break
+        
+        # Если ответ начинается со строчной буквы после удаления вводной фразы,
+        # делаем первую букву заглавной
+        if processed_response and processed_response[0].islower():
+            processed_response = processed_response[0].upper() + processed_response[1:]
+        
+        # Удаляем лишние пробелы и переносы строк
+        processed_response = processed_response.strip()
+        
+        # Удаляем точку в конце однострочного ответа для factoid-подобных вопросов,
+        # если ответ короткий (менее 8 слов) и не содержит других предложений
+        words = processed_response.split()
+        if (len(words) < 8 and 
+            processed_response.endswith('.') and 
+            '.' not in processed_response[:-1] and 
+            '!' not in processed_response and 
+            '?' not in processed_response):
+            processed_response = processed_response[:-1]
+        
+        return processed_response
 
 # Глобальный экземпляр для использования в приложении
 _ollama_instance = None
