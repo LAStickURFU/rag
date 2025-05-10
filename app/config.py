@@ -43,7 +43,7 @@ SPACY_MODEL = os.getenv("SPACY_MODEL", "ru_core_news_md")
 # Настройки LLM
 LLM_MODEL = os.getenv("LLM_MODEL", "mistral:7b-instruct")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "512"))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))
 
 # Настройки адаптивного количества фрагментов
 MIN_K = int(os.getenv("MIN_K", "2"))
@@ -57,8 +57,11 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 # Настройки токенового чанкера
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "512"))
 OVERLAP_TOKENS = int(os.getenv("OVERLAP_TOKENS", "20"))
-USE_TOKEN_CHUNKER = os.getenv("USE_TOKEN_CHUNKER", "true").lower() == "true"
+USE_TOKEN_CHUNKER = os.getenv("USE_TOKEN_CHUNKER", "false").lower() == "true"
 TOKEN_MODEL = os.getenv("TOKEN_MODEL", "mistralai/Mistral-7B-Instruct-v0.2")
+
+# Режим чанкинга: character, token, semantic, hierarchical
+CHUNKING_MODE = os.getenv("CHUNKING_MODE", "character")
 
 # Сводная информация о конфигурации для отладки
 # def get_config_summary():
@@ -97,13 +100,25 @@ class RagConfig:
         self.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", "200"))
         
         # Параметры токенового чанкера
-        self.use_token_chunker = os.getenv("USE_TOKEN_CHUNKER", "true").lower() == "true"
+        self.use_token_chunker = os.getenv("USE_TOKEN_CHUNKER", "false").lower() == "true"
         self.max_tokens = int(os.getenv("MAX_TOKENS", "512"))
         self.overlap_tokens = int(os.getenv("OVERLAP_TOKENS", "20"))
         self.token_model_name = os.getenv("TOKEN_MODEL", "mistralai/Mistral-7B-Instruct-v0.2")
         
-        # Параметры кэширования
-        self.cache_embeddings = os.getenv("CACHE_EMBEDDINGS", "true").lower() == "true"
+        # Параметры языка
+        self.language = os.getenv("LANGUAGE", "russian")
+        self.spacy_model = os.getenv("SPACY_MODEL", "ru_core_news_md")
+        
+        # Режим чанкинга
+        self.chunking_mode = os.getenv("CHUNKING_MODE", "character")
+        if self.use_token_chunker:
+            # Для обратной совместимости
+            self.chunking_mode = "token"
+            
+        # Настройки для иерархического чанкинга
+        self.heading_patterns = os.getenv("HEADING_PATTERNS", "").split('|') if os.getenv("HEADING_PATTERNS") else None
+        self.min_chunk_size = int(os.getenv("MIN_CHUNK_SIZE", "50"))
+        self.max_chunk_size = int(os.getenv("MAX_CHUNK_SIZE", "1000"))
 
 @lru_cache()
 def get_config() -> Dict[str, Any]:
@@ -185,10 +200,15 @@ def create_rag_service_from_config(custom_config=None):
         max_context_docs=config.max_context_docs,
         chunk_size=config.chunk_size,
         chunk_overlap=config.chunk_overlap,
-        use_token_chunker=config.use_token_chunker,
+        use_token_chunker=config.chunking_mode == "token",
         max_tokens=config.max_tokens,
         overlap_tokens=config.overlap_tokens,
-        cache_embeddings=config.cache_embeddings
+        chunking_mode=config.chunking_mode,
+        min_chunk_size=config.min_chunk_size,
+        max_chunk_size=config.max_chunk_size,
+        heading_patterns=config.heading_patterns,
+        language=config.language,
+        spacy_model=config.spacy_model
     )
     
     return rag_service

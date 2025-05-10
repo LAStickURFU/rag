@@ -17,10 +17,11 @@ import {
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import MenuIcon from '@mui/icons-material/Menu';
 import { useAuth } from '../contexts/AuthContext';
-import AssessmentIcon from '@mui/icons-material/Assessment';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 
 function Header() {
-  const { isAuthenticated, logout } = useAuth();
+  const { isAuthenticated, logout, isAdmin } = useAuth();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [anchorEl, setAnchorEl] = useState(null);
@@ -86,11 +87,19 @@ function Header() {
                     <MenuItem component={RouterLink} to="/documents" onClick={handleClose}>
                       Документы
                     </MenuItem>
-                    <MenuItem onClick={() => handleNavigate('/evaluation')}>
+                    {isAdmin() && (
+                      <MenuItem onClick={() => handleNavigate('/dashboard')}>
+                        <ListItemIcon>
+                          <AdminPanelSettingsIcon fontSize="small" />
+                        </ListItemIcon>
+                        <ListItemText>Панель администратора</ListItemText>
+                      </MenuItem>
+                    )}
+                    <MenuItem onClick={() => handleNavigate('/profile')}>
                       <ListItemIcon>
-                        <AssessmentIcon fontSize="small" />
+                        <AccountCircleIcon fontSize="small" />
                       </ListItemIcon>
-                      <ListItemText>Оценка качества</ListItemText>
+                      <ListItemText>Профиль</ListItemText>
                     </MenuItem>
                     <MenuItem onClick={handleLogout}>Выйти</MenuItem>
                   </>
@@ -116,8 +125,21 @@ function Header() {
                   <Button color="inherit" component={RouterLink} to="/documents">
                     Документы
                   </Button>
-                  <Button color="inherit" onClick={() => handleNavigate('/evaluation')}>
-                    Оценка качества
+                  {isAdmin() && (
+                    <Button 
+                      color="inherit" 
+                      onClick={() => handleNavigate('/dashboard')}
+                      startIcon={<AdminPanelSettingsIcon />}
+                    >
+                      Админ
+                    </Button>
+                  )}
+                  <Button 
+                    color="inherit" 
+                    onClick={() => handleNavigate('/profile')}
+                    startIcon={<AccountCircleIcon />}
+                  >
+                    Профиль
                   </Button>
                   <Button color="inherit" onClick={logout}>
                     Выйти

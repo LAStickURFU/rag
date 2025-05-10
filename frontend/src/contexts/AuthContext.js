@@ -1,5 +1,5 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
-import { isAuthenticated, getToken, logout, registerUser } from '../services/api';
+import { isAuthenticated, getToken, logout, registerUser, getCurrentUser } from '../services/api';
 
 // Создаем контекст для авторизации
 const AuthContext = createContext();
@@ -15,7 +15,21 @@ export const AuthProvider = ({ children }) => {
     const checkAuth = async () => {
       try {
         if (isAuthenticated()) {
-          setUser({ isAuthenticated: true });
+          // Получаем информацию о пользователе с сервера
+          try {
+            const userData = await getCurrentUser();
+            setUser({
+              isAuthenticated: true,
+              id: userData.id,
+              username: userData.username,
+              role: userData.role || 'user', // По умолчанию роль пользователя
+              created_at: userData.created_at
+            });
+          } catch (userError) {
+            console.error("Ошибка получения данных пользователя:", userError);
+            // Если не удалось получить данные, устанавливаем базовую информацию
+            setUser({ isAuthenticated: true });
+          }
         }
       } catch (err) {
         console.error("Ошибка проверки авторизации:", err);
@@ -33,7 +47,20 @@ export const AuthProvider = ({ children }) => {
     setError(null);
     try {
       const data = await getToken(username, password);
-      setUser({ isAuthenticated: true, username });
+      // После успешной авторизации получаем данные пользователя
+      try {
+        const userData = await getCurrentUser();
+        setUser({
+          isAuthenticated: true,
+          id: userData.id,
+          username: userData.username,
+          role: userData.role || 'user',
+          created_at: userData.created_at
+        });
+      } catch (userError) {
+        console.error("Ошибка получения данных пользователя:", userError);
+        setUser({ isAuthenticated: true, username });
+      }
       return data;
     } catch (err) {
       setError(err.message || 'Ошибка авторизации');
@@ -65,6 +92,11 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Проверка, является ли пользователь администратором
+  const isAdmin = () => {
+    return user?.role === 'admin';
+  };
+
   const value = {
     user,
     loading,
@@ -72,7 +104,9 @@ export const AuthProvider = ({ children }) => {
     login: handleLogin,
     logout: handleLogout,
     register: handleRegister,
-    isAuthenticated: user?.isAuthenticated || false
+    isAuthenticated: user?.isAuthenticated || false,
+    isAdmin: isAdmin,
+    userRole: user?.role || 'user'
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

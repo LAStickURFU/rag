@@ -13,6 +13,7 @@ class User(Base):
     username = Column(String, unique=True, index=True)
     hashed_password = Column(String)
     disabled = Column(Boolean, default=False)
+    role = Column(String, default="user")  # Роль: 'user' или 'admin'
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Отношения
@@ -57,6 +58,13 @@ class Document(Base):
     error_message = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     uuid = Column(String, unique=True, index=True)
+    chunking_mode = Column(String, default="character")  # Тип чанкинга: character, token, semantic, hierarchical
+    
+    # Дополнительные метаданные для хранения информации о параметрах обработки
+    chunk_size = Column(Integer, nullable=True)  # Размер чанка
+    chunk_overlap = Column(Integer, nullable=True)  # Перекрытие между чанками
+    embedding_model = Column(String, nullable=True)  # Модель для создания эмбеддингов
+    processing_params = Column(JSON, nullable=True)  # Дополнительные параметры обработки в формате JSON
     
     # Отношение
     user = relationship("User", back_populates="documents")
@@ -71,7 +79,7 @@ class ModelConfig(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     temperature = Column(Float, default=0.0)
     top_p = Column(Float, default=0.9)
-    max_tokens = Column(Integer, default=1024)
+    max_tokens = Column(Integer, default=2048)
     top_k_chunks = Column(Integer, default=5)
     context_window = Column(Integer, default=8192)
     model_name = Column(String, default="mistral")

@@ -114,7 +114,10 @@ export const getChatHistory = async () => {
 export const uploadDocuments = async (titles, files) => {
   try {
     const formData = new FormData();
-    files.forEach(file => formData.append('files', file));
+    files.forEach((file, index) => {
+      // Явно указываем имя файла и другие его свойства
+      formData.append('files', file, file.name);
+    });
     titles.forEach(title => formData.append('titles', title));
     const response = await api.post('/documents/upload', formData, {
       headers: {
@@ -127,20 +130,63 @@ export const uploadDocuments = async (titles, files) => {
   }
 };
 
-// Получение списка документов
-export const getDocuments = async () => {
+// Получение информации о текущем пользователе
+export const getCurrentUser = async () => {
   try {
-    const response = await api.get('/documents');
+    const response = await api.get('/me');
+    return response.data;
+  } catch (error) {
+    throw error.response ? error.response.data : new Error('Ошибка при получении данных пользователя');
+  }
+};
+
+// Обновление роли пользователя (только для админов)
+export const updateUserRole = async (username, role) => {
+  try {
+    const response = await api.post(`/users/${username}/role?role=${role}`);
+    return response.data;
+  } catch (error) {
+    throw error.response ? error.response.data : new Error('Ошибка при обновлении роли пользователя');
+  }
+};
+
+// Изменение пароля текущего пользователя
+export const changePassword = async (currentPassword, newPassword) => {
+  try {
+    const response = await api.post('/change-password', {
+      current_password: currentPassword,
+      new_password: newPassword
+    });
+    return response.data;
+  } catch (error) {
+    throw error.response ? error.response.data : new Error('Ошибка при изменении пароля');
+  }
+};
+
+// Сброс пароля пользователя (только для админов)
+export const resetUserPassword = async (username, newPassword) => {
+  try {
+    const response = await api.post(`/users/${username}/reset-password?new_password=${newPassword}`);
+    return response.data;
+  } catch (error) {
+    throw error.response ? error.response.data : new Error('Ошибка при сбросе пароля пользователя');
+  }
+};
+
+// Получение списка документов
+export const getDocuments = async (allUsers = false) => {
+  try {
+    const response = await api.get(`/documents${allUsers ? '?all_users=true' : ''}`);
     return response.data;
   } catch (error) {
     throw error.response ? error.response.data : new Error('Ошибка при получении списка документов');
   }
 };
 
-// Переиндексация всех документов пользователя
-export const reindexDocuments = async () => {
+// Переиндексация документов пользователя или всех документов
+export const reindexDocuments = async (allUsers = false) => {
   try {
-    const response = await api.post('/documents/reindex');
+    const response = await api.post(`/documents/reindex${allUsers ? '?all_users=true' : ''}`);
     return response.data;
   } catch (error) {
     throw error.response ? error.response.data : new Error('Ошибка при переиндексации документов');
@@ -167,35 +213,6 @@ export const updateModelSettings = async (settings) => {
   }
 };
 
-// Функция для оценки качества RAG
-export const evaluateRagQuality = async (evaluationData) => {
-  try {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      throw new Error('Требуется авторизация');
-    }
-
-    const response = await fetch(`${API_URL}/api/evaluate-rag`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify(evaluationData)
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || 'Ошибка оценки качества RAG');
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Ошибка при оценке качества RAG:', error);
-    throw error;
-  }
-};
-
 // Удаление документа
 export const deleteDocument = async (docId) => {
   try {
@@ -216,23 +233,44 @@ export const clearChatHistory = async () => {
   }
 };
 
-// Получение истории запусков оценки RAG
-export const getEvaluationHistory = async () => {
+// Очистка индекса векторной базы
+export const clearRagIndex = async (userId = null) => {
   try {
-    const response = await api.get('/api/evaluation/history');
+    const url = '/index/clear' + (userId ? `?user_id=${userId}` : '');
+    const response = await api.post(url);
     return response.data;
   } catch (error) {
-    throw error.response ? error.response.data : new Error('Ошибка при получении истории запусков оценки');
+    throw error.response ? error.response.data : new Error('Ошибка при очистке индекса');
   }
 };
 
-// Скачивание отчёта (json)
-export const downloadEvaluationReport = async (filename) => {
+// Удаление всех документов (только для админов)
+export const deleteAllDocuments = async () => {
   try {
-    const response = await api.get(`/api/evaluation/download/${filename}`, { responseType: 'blob' });
+    const response = await api.delete('/documents/all/clear');
     return response.data;
   } catch (error) {
-    throw error.response ? error.response.data : new Error('Ошибка при скачивании отчёта');
+    throw error.response ? error.response.data : new Error('Ошибка при удалении всех документов');
+  }
+};
+
+// Получение списка всех пользователей (только для админов)
+export const getAllUsers = async () => {
+  try {
+    const response = await api.get('/users');
+    return response.data;
+  } catch (error) {
+    throw error.response ? error.response.data : new Error('Ошибка при получении списка пользователей');
+  }
+};
+
+// Удаление пользователя (только для админов)
+export const deleteUser = async (username) => {
+  try {
+    const response = await api.delete(`/users/${username}`);
+    return response.data;
+  } catch (error) {
+    throw error.response ? error.response.data : new Error('Ошибка при удалении пользователя');
   }
 };
 

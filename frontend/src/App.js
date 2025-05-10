@@ -18,7 +18,7 @@ import DocumentsPage from './pages/DocumentsPage';
 import DashboardPage from './pages/DashboardPage';
 import UploadPage from './pages/UploadPage';
 import NotFoundPage from './pages/NotFoundPage';
-import EvaluationPage from './pages/EvaluationPage';
+import ProfilePage from './pages/ProfilePage';
 
 // Создаем тему приложения
 const theme = createTheme({
@@ -76,7 +76,7 @@ function AppContent() {
         />
         <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
         <Route path="/upload" element={<ProtectedRoute><UploadPage /></ProtectedRoute>} />
-        <Route path="/evaluation" element={<ProtectedRoute><EvaluationPage /></ProtectedRoute>} />
+        <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </Router>

@@ -25,8 +25,8 @@ class HybridRetriever:
     """
     
     def __init__(self, 
-                dense_weight: float = 0.6,  # Снижено с 0.7 для большего влияния BM25
-                reranker_weight: float = 0.6,  # Увеличено с 0.5 для усиления влияния reranker
+                dense_weight: float = 0.7,  # Увеличен вес векторного поиска для лучшей семантической релевантности
+                reranker_weight: float = 0.7,  # Усилено влияние reranker для более точного ранжирования
                 use_reranker: bool = True,
                 use_adaptive_k: bool = True,
                 cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
@@ -146,15 +146,15 @@ class HybridRetriever:
             return min(min_k, len(sorted_scores))
         
         # Находим значительные падения после min_k
-        significant_drops = [(i, drop) for i, drop in relative_drops if drop > 0.15 and i >= min_k]
+        significant_drops = [(i, drop) for i, drop in relative_drops if drop > 0.12 and i >= min_k]
         
         if significant_drops:
             # Берем первое значительное падение
             return significant_drops[0][0]
         else:
             # Если нет значительных падений, смотрим, какой минимальный score приемлем
-            # Берем все документы со score не менее 50% от максимального
-            threshold = sorted_scores[0] * 0.5
+            # Берем все документы со score не менее 60% от максимального (увеличено для лучшего качества ответов)
+            threshold = sorted_scores[0] * 0.6
             for i, score in enumerate(sorted_scores):
                 if score < threshold:
                     return max(min_k, i)
@@ -233,7 +233,7 @@ class HybridRetriever:
         hybrid_scores.sort(key=lambda x: x[1], reverse=True)
         
         # Добавляем Dynamic Rerank Threshold
-        MIN_RERANK_THRESHOLD = 0.4  # Минимальный порог для переранжирования
+        MIN_RERANK_THRESHOLD = 0.3  # Понижен с 0.4 для более широкого охвата кандидатов
         
         # Отбираем все фрагменты выше порога для переранжирования
         threshold_scores = [(idx, score) for idx, score in hybrid_scores 
@@ -244,7 +244,7 @@ class HybridRetriever:
             threshold_scores = hybrid_scores[:top_k]
             
         # Ограничиваем количество для производительности
-        max_rerank_candidates = min(top_k * 3, len(threshold_scores))
+        max_rerank_candidates = min(top_k * 4, len(threshold_scores))  # Увеличено с top_k * 3 для более широкого охвата
         rerank_candidates = threshold_scores[:max_rerank_candidates]
         
         # Формируем данные для переранжирования

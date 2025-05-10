@@ -17,16 +17,27 @@ import {
   DialogContent,
   DialogActions,
   Button,
-  Divider
+  Divider,
+  Tooltip
 } from '@mui/material';
 import DescriptionIcon from '@mui/icons-material/Description';
 import WebIcon from '@mui/icons-material/Web';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import DeleteIcon from '@mui/icons-material/Delete';
+import PersonIcon from '@mui/icons-material/Person';
 import api from '../services/api';
 
-function DocumentList({ documents, loading, onDelete, selectedIds = [], onSelect, onSelectAll, onDeleteSelected }) {
+function DocumentList({ 
+  documents, 
+  loading, 
+  onDelete, 
+  selectedIds = [], 
+  onSelect, 
+  onSelectAll, 
+  onDeleteSelected,
+  showOwner = false 
+}) {
   const theme = useTheme();
   const [detailOpen, setDetailOpen] = useState(false);
   const [detail, setDetail] = useState(null);
@@ -166,6 +177,18 @@ function DocumentList({ documents, loading, onDelete, selectedIds = [], onSelect
                       color="primary"
                       variant="outlined"
                     />
+                    {showOwner && doc.uploader && (
+                      <Tooltip title="Пользователь, загрузивший документ">
+                        <Chip
+                          icon={<PersonIcon />}
+                          label={doc.uploader}
+                          size="small"
+                          sx={{ mr: 1, fontSize: '0.75rem', mt: 0.5 }}
+                          color="secondary"
+                          variant="outlined"
+                        />
+                      </Tooltip>
+                    )}
                     <Box
                       component="span"
                       sx={{ mt: 0.5, display: 'inline-block', color: 'text.secondary', fontSize: '0.875rem' }}
@@ -177,7 +200,10 @@ function DocumentList({ documents, loading, onDelete, selectedIds = [], onSelect
                 secondaryTypographyProps={{ component: 'div' }}
               />
               {onDelete && (
-                <IconButton edge="end" aria-label="delete" onClick={() => onDelete(doc.id)}>
+                <IconButton edge="end" aria-label="delete" onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(doc.id);
+                }}>
                   <DeleteIcon />
                 </IconButton>
               )}
@@ -200,8 +226,8 @@ function DocumentList({ documents, loading, onDelete, selectedIds = [], onSelect
               <Typography variant="subtitle1" sx={{ mb: 1 }}>{detail.title}</Typography>
               <Divider sx={{ mb: 1 }} />
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Статус:</b> {detail.status}</Box>
-              <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Имя файла:</b> {detail.file_name || '-'}</Box>
-              <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Размер файла:</b> {detail.file_size ? `${(detail.file_size/1024).toFixed(1)} KB` : '-'}</Box>
+              <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Имя файла:</b> {detail.filename || '-'}</Box>
+              <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Размер файла:</b> {detail.size ? `${(detail.size/1024).toFixed(1)} KB` : '-'}</Box>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Дата загрузки:</b> {detail.created_at ? new Date(detail.created_at).toLocaleString() : '-'}</Box>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Последнее обновление:</b> {detail.updated_at ? new Date(detail.updated_at).toLocaleString() : '-'}</Box>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Источник:</b> {detail.source}</Box>
@@ -209,6 +235,10 @@ function DocumentList({ documents, loading, onDelete, selectedIds = [], onSelect
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>ID:</b> {detail.id}</Box>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Кол-во чанков:</b> {detail.chunks_count}</Box>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Длина текста:</b> {detail.content_length} символов</Box>
+              <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Режим чанкинга:</b> {detail.chunking_mode || 'character'}</Box>
+              {showOwner && detail.user_id && (
+                <Box component="span" sx={{ display: 'block', mb: 1 }}><b>ID пользователя:</b> {detail.user_id}</Box>
+              )}
               {detail.error_message && (
                 <Box component="span" sx={{ display: 'block', color: 'error.main', mb: 1 }}><b>Ошибка:</b> {detail.error_message}</Box>
               )}

@@ -1,10 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Box,
   Button,
   TextField,
-  FormControl,
-  InputLabel,
   Typography,
   Paper,
   CircularProgress,
@@ -19,6 +17,9 @@ function FileUpload({ onUpload, loading }) {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const formRef = useRef(null);
+  const isSubmittingRef = useRef(false); // Доп. флаг для предотвращения повторной отправки
 
   const SUPPORTED_EXTENSIONS = [
     'doc', 'docx', 'txt', 'pdf', 'rtf', 'md', 'json', 'csv', 'tsv', 'html', 'htm', 'xml', 'yaml', 'yml', 'odt', 'epub', 'log', 'tex', 'ini', 'jsonl'
@@ -27,8 +28,12 @@ function FileUpload({ onUpload, loading }) {
 
   const handleFileChange = (e) => {
     const selectedFiles = Array.from(e.target.files || []);
+    if (selectedFiles.length === 0) return;
+    
+    // Сразу очищаем предыдущий выбор файлов и названий
     let validFiles = [];
-    let newTitles = [...titles];
+    let newTitles = [];
+    
     for (const file of selectedFiles) {
       const ext = file.name.split('.').pop().toLowerCase();
       if (!SUPPORTED_EXTENSIONS.includes(ext)) {
@@ -42,10 +47,16 @@ function FileUpload({ onUpload, loading }) {
       validFiles.push(file);
       newTitles.push(file.name.split('.')[0]);
     }
-    if (validFiles.length === 0 && selectedFiles.length > 0) return;
-    setFiles(prev => [...prev, ...validFiles]);
+    
+    if (validFiles.length === 0) return;
+    
+    // Заменяем старые файлы и названия новыми
+    setFiles(validFiles);
     setTitles(newTitles);
     setError('');
+    
+    // Сбрасываем статус успешной загрузки
+    setSuccess(false);
   };
 
   const handleDrag = (e) => {
@@ -72,6 +83,7 @@ function FileUpload({ onUpload, loading }) {
     arr[idx] = value;
     setTitles(arr);
   };
+  
   const handleRemoveFile = (idx) => {
     setFiles(files.filter((_, i) => i !== idx));
     setTitles(titles.filter((_, i) => i !== idx));
@@ -79,30 +91,65 @@ function FileUpload({ onUpload, loading }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
-    setSuccess(false);
-    if (!files.length) {
-      setError('Выберите хотя бы один файл для загрузки');
+    e.stopPropagation(); // Добавляем остановку всплытия событий
+    
+    // Двойная проверка на повторную отправку
+    if (submitting || loading || isSubmittingRef.current) {
+      console.log('Форма уже отправляется или идет загрузка');
       return;
     }
+    
+    // Устанавливаем флаг отправки сразу в обоих местах
+    setSubmitting(true);
+    isSubmittingRef.current = true;
+    
+    setError('');
+    setSuccess(false);
+    
+    if (!files.length) {
+      setError('Выберите хотя бы один файл для загрузки');
+      setSubmitting(false);
+      isSubmittingRef.current = false;
+      return;
+    }
+    
     for (let i = 0; i < titles.length; ++i) {
       if (!titles[i] || !titles[i].trim()) {
         setError('Укажите название для всех документов');
+        setSubmitting(false);
+        isSubmittingRef.current = false;
         return;
       }
     }
+    
     try {
+      console.log('Отправка файлов на сервер:', files.length, 'файлов');
+      // Блокируем кнопку submit на форме для предотвращения повторных нажатий
+      if (formRef.current) {
+        const submitButton = formRef.current.querySelector('[type="submit"]');
+        if (submitButton) submitButton.disabled = true;
+      }
+      
+      // Используем только функцию onUpload, предоставленную родительским компонентом
       await onUpload(titles, files);
       setSuccess(true);
       setTitles([]);
       setFiles([]);
+      
       // Сбросить input
       const fileInput = document.getElementById('document-file');
       if (fileInput) fileInput.value = '';
     } catch (err) {
+      console.error('Ошибка при загрузке:', err);
       setError(err.message || 'Ошибка при загрузке файлов');
+    } finally {
+      setSubmitting(false);
+      isSubmittingRef.current = false;
     }
   };
+
+  // Проверяем, отключена ли форма
+  const isFormDisabled = loading || submitting;
 
   return (
     <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
@@ -116,6 +163,7 @@ function FileUpload({ onUpload, loading }) {
         onSubmit={handleSubmit}
         onDragEnter={handleDrag}
         sx={{ position: 'relative' }}
+        ref={formRef}
       >
         <Box
           onDragEnter={handleDrag}
@@ -130,7 +178,8 @@ function FileUpload({ onUpload, loading }) {
             textAlign: 'center',
             bgcolor: dragActive ? '#e3f2fd' : 'inherit',
             transition: 'background 0.2s',
-            cursor: 'pointer',
+            cursor: isFormDisabled ? 'not-allowed' : 'pointer',
+            opacity: isFormDisabled ? 0.7 : 1,
           }}
         >
           <CloudUploadIcon color={dragActive ? 'primary' : 'disabled'} sx={{ fontSize: 48, mb: 1 }} />
@@ -143,7 +192,7 @@ function FileUpload({ onUpload, loading }) {
             fullWidth
             startIcon={<UploadFileIcon />}
             sx={{ mt: 2, mb: 1 }}
-            disabled={loading}
+            disabled={isFormDisabled}
           >
             Выбрать файлы
             <input
@@ -153,7 +202,7 @@ function FileUpload({ onUpload, loading }) {
               hidden
               multiple
               onChange={handleFileChange}
-              disabled={loading}
+              disabled={isFormDisabled}
               data-testid="file-input"
             />
           </Button>
@@ -171,10 +220,16 @@ function FileUpload({ onUpload, loading }) {
               sx={{ mx: 1, width: 180 }}
               required
               inputProps={{ 'data-testid': 'title-input' }}
-              disabled={loading}
+              disabled={isFormDisabled}
             />
             <Box data-testid="source-select" sx={{ display: 'none' }} />
-            <Button color="error" size="small" onClick={() => handleRemoveFile(idx)} sx={{ ml: 1 }}>
+            <Button 
+              color="error" 
+              size="small" 
+              onClick={() => handleRemoveFile(idx)} 
+              sx={{ ml: 1 }}
+              disabled={isFormDisabled}
+            >
               Удалить
             </Button>
           </Box>
@@ -184,12 +239,12 @@ function FileUpload({ onUpload, loading }) {
           variant="contained"
           color="primary"
           fullWidth
-          disabled={loading || !files.length}
+          disabled={isFormDisabled || !files.length}
           sx={{ mt: 2 }}
-          startIcon={loading && <CircularProgress size={20} color="inherit" />}
+          startIcon={isFormDisabled && <CircularProgress size={20} color="inherit" />}
           data-testid="submit-button"
         >
-          {loading ? 'Загрузка...' : 'Загрузить документы'}
+          {isFormDisabled ? 'Загрузка...' : 'Загрузить документы'}
         </Button>
       </Box>
     </Paper>

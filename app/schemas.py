@@ -32,6 +32,7 @@ class UserCreate(UserBase):
 class User(UserBase):
     id: int
     disabled: bool
+    role: str  # Добавляем роль пользователя
     created_at: datetime
     chats: List[Chat] = []
 
@@ -52,11 +53,17 @@ class QuestionRequest(BaseModel):
     question: str
 
 
+class ChangePasswordRequest(BaseModel):
+    """Запрос на изменение пароля пользователя."""
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=1)
+
+
 class ModelSettings(BaseModel):
     """Модель для настроек параметров генерации ответов."""
     temperature: float = 0.0
     top_p: float = 0.9
-    max_tokens: int = 1024
+    max_tokens: int = 2048
     top_k_chunks: int = 5
     context_window: int = 8192  # Максимальный размер контекста (в токенах)
 
@@ -80,17 +87,4 @@ class ChatResponse(BaseModel):
     relevant_chunks: List[ChunkInfo] = []
     meta: Optional[Dict[str, Any]] = None
     rag_used: Optional[bool] = True
-
-
-# Pydantic модели для оценки RAGAS
-class RagasEvalItem(BaseModel):
-    question: str
-    answer: str  # Ответ, который нужно оценить
-    ground_truth: str  # Эталонный ответ
-
-
-class RagasEvaluationRequest(BaseModel):
-    eval_items: List[RagasEvalItem]
-    description: Optional[str] = None
-    # Можно добавить параметры для RAGAS
 

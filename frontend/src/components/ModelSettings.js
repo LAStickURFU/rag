@@ -23,7 +23,7 @@ const ModelSettings = () => {
   const [settings, setSettings] = useState({
     temperature: 0.0,
     top_p: 0.9,
-    max_tokens: 1024,
+    max_tokens: 2048,
     top_k_chunks: 5,
     context_window: 8192
   });

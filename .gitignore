@@ -50,8 +50,6 @@ coverage.xml
 indexes/
 .ipynb_checkpoints/
 logs/
-app/evaluation/results/**
-app/evaluation/datasets/**
 qdrant_data/
 .cursor/
 **/node_modules/

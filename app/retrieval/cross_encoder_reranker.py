@@ -179,7 +179,7 @@ class CrossEncoderReranker:
         # Получаем scores от CrossEncoder
         cross_encoder_results = self.rerank(query, documents, batch_size=batch_size)
         
-        # Нормализуем CrossEncoder scores
+        # Нормализуем CrossEncoder scores с более агрессивным нелинейным преобразованием
         if cross_encoder_results:
             max_ce_score = max(score for _, score in cross_encoder_results)
             min_ce_score = min(score for _, score in cross_encoder_results)
@@ -189,16 +189,21 @@ class CrossEncoderReranker:
             ce_scores = {}
             for idx, score in cross_encoder_results:
                 if range_ce > 0:
-                    # Применяем нелинейную функцию для усиления больших значений
+                    # Применяем сигмоидную трансформацию для усиления контраста
                     normalized_score = (score - min_ce_score) / range_ce
-                    # Опционально: усиливаем высокие значения через квадратичную функцию
-                    ce_scores[idx] = normalized_score ** 2 if normalized_score > 0.7 else normalized_score
+                    # Используем кубическую функцию для усиления контраста
+                    enhanced_score = normalized_score ** 3 if normalized_score > 0.6 else normalized_score ** 2
+                    # Отсекаем очень низкие скоры
+                    ce_scores[idx] = max(0.0, enhanced_score - 0.1)
                 else:
                     ce_scores[idx] = 1.0
+                
+                # Логируем сырые и нормализованные скоры для отладки
+                logger.debug(f"Doc {idx} CE raw score: {score:.4f}, normalized: {ce_scores[idx]:.4f}")
         else:
             ce_scores = {i: 1.0 for i in range(len(documents))}
         
-        # Нормализуем original scores
+        # Нормализуем original scores с более агрессивным отсечением
         max_orig = max(original_scores)
         min_orig = min(original_scores)
         range_orig = max_orig - min_orig
@@ -206,26 +211,39 @@ class CrossEncoderReranker:
         norm_orig_scores = {}
         for i, score in enumerate(original_scores):
             if range_orig > 0:
-                norm_orig_scores[i] = (score - min_orig) / range_orig
+                orig_norm = (score - min_orig) / range_orig
+                # Применяем квадратичную функцию и отсечение низких значений
+                norm_orig_scores[i] = max(0.0, orig_norm ** 2 - 0.1)
             else:
                 norm_orig_scores[i] = 1.0
         
-        # Объединяем scores с заданными весами
+        # Объединяем scores с заданными весами, добавляя больше нелинейности
         combined_scores = []
         for i in range(len(documents)):
             orig_score = norm_orig_scores[i]
             ce_score = ce_scores.get(i, 0.0)
             
-            # Взвешенная сумма с потенциальным усилением для очень релевантных документов
-            combined_score = (1 - weight) * orig_score + weight * ce_score
+            # Применяем взвешенное произведение вместо суммы для более резкого контраста
+            # Это даст высокий результат только если оба метода дали высокий скор
+            combined_score = (orig_score ** (1 - weight)) * (ce_score ** weight)
             
-            # Дополнительный бонус для документов с очень высоким score по обоим метрикам
-            if orig_score > 0.8 and ce_score > 0.8:
-                combined_score += 0.1  # Бонус для очень уверенных совпадений
-                
-            combined_scores.append((i, combined_score))
+            # Дополнительный бонус для документов с высоким score по обоим метрикам
+            if orig_score > 0.7 and ce_score > 0.7:
+                combined_score += 0.2  # Повышенный бонус для очень уверенных совпадений
+            
+            # Отсекаем низкие значения для более выраженного контраста
+            final_score = max(0.0, combined_score)
+            
+            combined_scores.append((i, final_score))
+            
+            # Логируем детали ранжирования
+            logger.debug(f"Doc {i}: orig={orig_score:.4f}, ce={ce_score:.4f}, combined={final_score:.4f}")
         
         # Сортируем по убыванию
         combined_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Логируем итоговые рейтинги
+        for i, (idx, score) in enumerate(combined_scores[:5]):
+            logger.info(f"Rank {i+1}: Doc {idx} with score {score:.4f}")
         
         return combined_scores 

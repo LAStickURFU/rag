@@ -1,232 +1,265 @@
 """
-Модуль для мониторинга производительности и качества RAG-системы.
+Модуль для сбора и хранения метрик производительности и качества RAG-системы.
 """
 
-import time
-import threading
 import logging
-import datetime
-import json
-import os
-from typing import Dict, List, Any, Optional, Deque
-from collections import deque
+import time
+from typing import Dict, Any, List, Optional
+import threading
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class RAGMetrics:
-    """Класс для мониторинга производительности RAG-системы."""
+class MetricsSingleton:
+    """
+    Синглтон для сбора метрик по всему приложению.
+    Обеспечивает запись метрик производительности, качества и ошибок.
+    """
+    _instance = None
+    _lock = threading.Lock()
     
-    def __init__(self, metrics_dir: str = "app/monitoring/metrics"):
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(MetricsSingleton, cls).__new__(cls)
+                cls._instance._initialize()
+            return cls._instance
+    
+    def _initialize(self):
+        """Инициализация хранилища метрик."""
+        self.latency_metrics = {}
+        self.error_counts = {}
+        self.quality_metrics = {}
+        self.recent_queries = []
+        self.max_queries_stored = 100
+        self.start_time = time.time()
+    
+    def record_latency(self, phase: str, elapsed_ms: float) -> None:
         """
-        Инициализация системы метрик.
+        Записывает метрику времени выполнения.
         
         Args:
-            metrics_dir: Директория для сохранения метрик
+            phase: Название фазы (retrieval, generation, total)
+            elapsed_ms: Время выполнения в миллисекундах
         """
-        self.metrics_dir = metrics_dir
-        os.makedirs(metrics_dir, exist_ok=True)
+        if phase not in self.latency_metrics:
+            self.latency_metrics[phase] = {
+                'count': 0,
+                'total_ms': 0,
+                'min_ms': float('inf'),
+                'max_ms': 0,
+                'recent': []
+            }
         
-        # Метрики производительности
-        self.latency_metrics: Dict[str, Deque[float]] = {
-            "retrieval": deque(maxlen=1000),  # Последние 1000 значений
-            "generation": deque(maxlen=1000),
-            "total": deque(maxlen=1000)
-        }
+        self.latency_metrics[phase]['count'] += 1
+        self.latency_metrics[phase]['total_ms'] += elapsed_ms
+        self.latency_metrics[phase]['min_ms'] = min(self.latency_metrics[phase]['min_ms'], elapsed_ms)
+        self.latency_metrics[phase]['max_ms'] = max(self.latency_metrics[phase]['max_ms'], elapsed_ms)
         
-        # Метрики качества
-        self.quality_metrics: Dict[str, Deque[float]] = {
-            "answer_similarity": deque(maxlen=1000),
-            "context_precision": deque(maxlen=1000),
-            "context_recall": deque(maxlen=1000),
-            "faithfulness": deque(maxlen=1000)
-        }
-        
-        # Счетчики ошибок
-        self.errors: Dict[str, int] = {
-            "retrieval_errors": 0,
-            "generation_errors": 0,
-            "total_requests": 0
-        }
-        
-        # История пользовательских запросов (для анализа дрифта)
-        self.recent_queries: Deque[Dict[str, Any]] = deque(maxlen=100)
-        
-        # Мониторинг тепловой карты запросов
-        self.query_heatmap: Dict[int, int] = {
-            hour: 0 for hour in range(24)
-        }
-        
-        # Запускаем периодическое сохранение метрик
-        self.start_metrics_saver()
+        # Храним последние 10 значений для анализа тренда
+        recent = self.latency_metrics[phase]['recent']
+        recent.append(elapsed_ms)
+        if len(recent) > 10:
+            recent.pop(0)
     
-    def record_latency(self, phase: str, latency_ms: float):
+    def record_error(self, error_type: str) -> None:
         """
-        Записывает метрику задержки.
-        
-        Args:
-            phase: Фаза (retrieval, generation, total)
-            latency_ms: Задержка в миллисекундах
-        """
-        if phase in self.latency_metrics:
-            self.latency_metrics[phase].append(latency_ms)
-    
-    def record_quality(self, metric: str, value: float):
-        """
-        Записывает метрику качества.
-        
-        Args:
-            metric: Название метрики
-            value: Значение метрики
-        """
-        if metric in self.quality_metrics:
-            self.quality_metrics[metric].append(value)
-    
-    def record_error(self, error_type: str):
-        """
-        Учитывает ошибку.
+        Записывает ошибку указанного типа.
         
         Args:
             error_type: Тип ошибки
         """
-        if error_type in self.errors:
-            self.errors[error_type] += 1
-        self.errors["total_requests"] += 1
+        if error_type not in self.error_counts:
+            self.error_counts[error_type] = 0
+        self.error_counts[error_type] += 1
     
-    def record_query(self, query: str):
+    def record_query(self, query: str) -> None:
         """
         Записывает запрос пользователя.
         
         Args:
-            query: Текст запроса
+            query: Запрос пользователя
         """
+        # Обрезаем длинные запросы и сохраняем только последние N
+        if len(query) > 200:
+            query = query[:197] + "..."
+        
         self.recent_queries.append({
-            "timestamp": datetime.datetime.now().isoformat(),
-            "query": query
+            'query': query,
+            'timestamp': time.time()
         })
         
-        # Обновляем тепловую карту запросов
-        current_hour = datetime.datetime.now().hour
-        self.query_heatmap[current_hour] += 1
-        
-        self.errors["total_requests"] += 1
+        if len(self.recent_queries) > self.max_queries_stored:
+            self.recent_queries.pop(0)
     
-    def get_metrics_summary(self) -> Dict[str, Any]:
+    def record_quality(self, metric_name: str, value: float) -> None:
         """
-        Возвращает сводку метрик.
-        
-        Returns:
-            Словарь с метриками
-        """
-        def safe_mean(values):
-            return sum(values) / len(values) if values else 0
-        
-        # Готовим метрики производительности
-        perf_metrics = {}
-        for phase, values in self.latency_metrics.items():
-            if values:
-                perf_metrics[f"{phase}_avg_ms"] = safe_mean(values)
-                perf_metrics[f"{phase}_p95_ms"] = self._percentile(values, 95)
-                perf_metrics[f"{phase}_p99_ms"] = self._percentile(values, 99)
-        
-        # Готовим метрики качества
-        quality_summary = {}
-        for metric, values in self.quality_metrics.items():
-            if values:
-                quality_summary[f"{metric}_avg"] = safe_mean(values)
-                quality_summary[f"{metric}_min"] = min(values)
-        
-        # Готовим статистику ошибок
-        error_rate = 0
-        if self.errors["total_requests"] > 0:
-            error_rate = (self.errors["retrieval_errors"] + self.errors["generation_errors"]) / self.errors["total_requests"]
-        
-        return {
-            "performance": perf_metrics,
-            "quality": quality_summary,
-            "error_rate": error_rate,
-            "total_requests": self.errors["total_requests"],
-            "query_distribution": dict(self.query_heatmap),
-            "timestamp": datetime.datetime.now().isoformat()
-        }
-    
-    def _percentile(self, values: List[float], p: int) -> float:
-        """
-        Рассчитывает перцентиль для списка значений.
+        Записывает метрику качества.
         
         Args:
-            values: Список значений
-            p: Перцентиль (0-100)
+            metric_name: Название метрики
+            value: Значение метрики
+        """
+        if metric_name not in self.quality_metrics:
+            self.quality_metrics[metric_name] = {
+                'count': 0,
+                'total': 0,
+                'min': float('inf'),
+                'max': 0,
+                'recent': []
+            }
+        
+        self.quality_metrics[metric_name]['count'] += 1
+        self.quality_metrics[metric_name]['total'] += value
+        self.quality_metrics[metric_name]['min'] = min(self.quality_metrics[metric_name]['min'], value)
+        self.quality_metrics[metric_name]['max'] = max(self.quality_metrics[metric_name]['max'], value)
+        
+        # Храним последние 10 значений
+        recent = self.quality_metrics[metric_name]['recent']
+        recent.append(value)
+        if len(recent) > 10:
+            recent.pop(0)
+    
+    def get_latency_stats(self) -> Dict[str, Any]:
+        """
+        Возвращает статистику по времени выполнения.
+        
+        Returns:
+            Словарь со статистикой по фазам
+        """
+        result = {}
+        for phase, metrics in self.latency_metrics.items():
+            if metrics['count'] > 0:
+                avg = metrics['total_ms'] / metrics['count']
+                result[phase] = {
+                    'count': metrics['count'],
+                    'avg_ms': round(avg, 2),
+                    'min_ms': round(metrics['min_ms'], 2),
+                    'max_ms': round(metrics['max_ms'], 2),
+                    'recent': [round(x, 2) for x in metrics['recent']]
+                }
+        return result
+    
+    def get_error_stats(self) -> Dict[str, int]:
+        """
+        Возвращает статистику по ошибкам.
+        
+        Returns:
+            Словарь с количеством ошибок по типам
+        """
+        return dict(self.error_counts)
+    
+    def get_quality_stats(self) -> Dict[str, Any]:
+        """
+        Возвращает статистику по метрикам качества.
+        
+        Returns:
+            Словарь со статистикой по метрикам
+        """
+        result = {}
+        for metric, stats in self.quality_metrics.items():
+            if stats['count'] > 0:
+                avg = stats['total'] / stats['count']
+                result[metric] = {
+                    'count': stats['count'],
+                    'avg': round(avg, 4),
+                    'min': round(stats['min'], 4),
+                    'max': round(stats['max'], 4),
+                    'recent': [round(x, 4) for x in stats['recent']]
+                }
+        return result
+    
+    def get_recent_queries(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Возвращает последние запросы.
+        
+        Args:
+            limit: Максимальное число запросов
             
         Returns:
-            Значение перцентиля
+            Список последних запросов
         """
-        if not values:
-            return 0
-            
-        sorted_values = sorted(values)
-        k = (len(sorted_values) - 1) * p / 100
-        f = int(k)
-        c = k - f
+        return self.recent_queries[-limit:] if self.recent_queries else []
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """
+        Возвращает общую сводку метрик.
         
-        if f + 1 < len(sorted_values):
-            return sorted_values[f] * (1 - c) + sorted_values[f + 1] * c
+        Returns:
+            Словарь со сводной информацией
+        """
+        uptime_seconds = time.time() - self.start_time
+        
+        total_queries = 0
+        for phase, metrics in self.latency_metrics.items():
+            if phase == 'total':
+                total_queries = metrics['count']
+                break
+        
+        return {
+            'uptime_seconds': round(uptime_seconds, 2),
+            'total_queries': total_queries,
+            'error_rate': self._get_error_rate(),
+            'avg_latency': self._get_avg_latency('total'),
+            'performance_trend': self._get_performance_trend()
+        }
+    
+    def _get_error_rate(self) -> float:
+        """
+        Вычисляет уровень ошибок.
+        
+        Returns:
+            Процент ошибок от общего числа запросов
+        """
+        total_errors = sum(self.error_counts.values())
+        total_queries = self.latency_metrics.get('total', {}).get('count', 0)
+        
+        if total_queries == 0:
+            return 0.0
+        
+        return round((total_errors / total_queries) * 100, 2)
+    
+    def _get_avg_latency(self, phase: str) -> float:
+        """
+        Возвращает среднее время выполнения для указанной фазы.
+        
+        Args:
+            phase: Название фазы
+            
+        Returns:
+            Среднее время в миллисекундах
+        """
+        if phase not in self.latency_metrics or self.latency_metrics[phase]['count'] == 0:
+            return 0.0
+        
+        return round(self.latency_metrics[phase]['total_ms'] / self.latency_metrics[phase]['count'], 2)
+    
+    def _get_performance_trend(self) -> str:
+        """
+        Анализирует тренд производительности.
+        
+        Returns:
+            Строка с описанием тренда
+        """
+        if 'total' not in self.latency_metrics or len(self.latency_metrics['total']['recent']) < 5:
+            return "Недостаточно данных"
+        
+        recent = self.latency_metrics['total']['recent']
+        avg_first_half = sum(recent[:len(recent)//2]) / (len(recent)//2)
+        avg_second_half = sum(recent[len(recent)//2:]) / (len(recent) - len(recent)//2)
+        
+        if avg_second_half < avg_first_half * 0.9:
+            return "Улучшение"
+        elif avg_second_half > avg_first_half * 1.1:
+            return "Ухудшение"
         else:
-            return sorted_values[f]
-    
-    def save_metrics(self):
-        """Сохраняет текущие метрики в файл."""
-        metrics = self.get_metrics_summary()
-        
-        timestamp = datetime.datetime.now().strftime("%Y%m%d")
-        metrics_file = os.path.join(self.metrics_dir, f"metrics_{timestamp}.json")
-        
-        try:
-            # Загружаем существующие метрики, если есть
-            existing_metrics = []
-            if os.path.exists(metrics_file):
-                with open(metrics_file, "r", encoding="utf-8") as f:
-                    existing_metrics = json.load(f)
-            
-            # Добавляем новые метрики
-            if isinstance(existing_metrics, list):
-                existing_metrics.append(metrics)
-            else:
-                existing_metrics = [metrics]
-            
-            # Сохраняем
-            with open(metrics_file, "w", encoding="utf-8") as f:
-                json.dump(existing_metrics, f, ensure_ascii=False, indent=2)
-                
-            logger.info(f"Saved metrics to {metrics_file}")
-        except Exception as e:
-            logger.error(f"Error saving metrics: {str(e)}")
-    
-    def start_metrics_saver(self):
-        """Запускает периодическое сохранение метрик."""
-        def saver_thread():
-            while True:
-                try:
-                    self.save_metrics()
-                except Exception as e:
-                    logger.error(f"Error in metrics saver thread: {str(e)}")
-                # Сохраняем каждый час
-                time.sleep(3600)
-        
-        threading.Thread(target=saver_thread, daemon=True).start()
+            return "Стабильно"
 
-# Глобальный экземпляр для метрик
-rag_metrics_instance = None
 
-def get_metrics_instance() -> RAGMetrics:
+def get_metrics_instance() -> MetricsSingleton:
     """
-    Получить глобальный экземпляр метрик.
+    Возвращает экземпляр синглтона для метрик.
     
     Returns:
-        Экземпляр RAGMetrics
+        Экземпляр MetricsSingleton
     """
-    global rag_metrics_instance
-    if rag_metrics_instance is None:
-        rag_metrics_instance = RAGMetrics()
-    return rag_metrics_instance 
+    return MetricsSingleton() 
