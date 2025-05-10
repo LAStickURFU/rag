@@ -15,7 +15,6 @@ logs_dir.mkdir(exist_ok=True)
 DEFAULT_LOG_FILE = os.getenv('LOG_FILE_PATH', 'logs/rag_backend.log')
 OLLAMA_LOG_FILE = os.getenv('OLLAMA_LOG_FILE_PATH', 'logs/ollama.log')
 RETRIEVAL_LOG_FILE = os.getenv('RETRIEVAL_LOG_FILE_PATH', 'logs/retrieval.log')
-EVALUATION_LOG_FILE = os.getenv('EVALUATION_LOG_FILE_PATH', 'logs/evaluation.log')
 RAG_LOG_FILE = os.getenv('RAG_LOG_FILE_PATH', 'logs/rag.log')
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 
@@ -67,15 +66,6 @@ LOGGING_CONFIG = {
             'backupCount': 3,
             'encoding': 'utf8'
         },
-        'evaluation_file': {
-            'level': LOG_LEVEL,
-            'formatter': 'detailed',
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': EVALUATION_LOG_FILE,
-            'maxBytes': 10485760,  # 10 MB
-            'backupCount': 3,
-            'encoding': 'utf8'
-        },
         'rag_file': {
             'level': LOG_LEVEL,
             'formatter': 'detailed',
@@ -104,16 +94,6 @@ LOGGING_CONFIG = {
         },
         'app.retrieval': {
             'handlers': ['console', 'retrieval_file'],
-            'level': LOG_LEVEL,
-            'propagate': False
-        },
-        'app.evaluation': {
-            'handlers': ['console', 'evaluation_file'],
-            'level': LOG_LEVEL,
-            'propagate': False
-        },
-        'evaluate_rag': {
-            'handlers': ['console', 'evaluation_file'],
             'level': LOG_LEVEL,
             'propagate': False
         },
