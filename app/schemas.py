@@ -67,6 +67,10 @@ class ModelSettings(BaseModel):
     top_k_chunks: int = 5
     context_window: int = 8192  # Максимальный размер контекста (в токенах)
     model_name: str = "mistral:7b-instruct"  # Выбранная модель
+    
+    # Отключаем защищенные пространства имен
+    # для избегания конфликтов с полем model_name
+    model_config = {"protected_namespaces": ()}
 
 
 class ModelInfo(BaseModel):

@@ -178,10 +178,11 @@ async def startup_event():
         executor.shutdown(wait=False)  # Закрываем executor без ожидания задач
 
 
-async def initialize_ollama_sync():
-    """Обертка для запуска initialize_ollama синхронно в отдельном потоке."""
+def initialize_ollama_sync():
+    """Синхронная обертка для запуска initialize_ollama в отдельном потоке."""
     try:
-        await initialize_ollama()
+        # Создаем новый event loop для выполнения асинхронной функции
+        asyncio.run(initialize_ollama())
     except Exception as e:
         logger.error(f"Error in Ollama initialization thread: {str(e)}")
 
