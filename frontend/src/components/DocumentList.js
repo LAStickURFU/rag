@@ -18,7 +18,9 @@ import {
   DialogActions,
   Button,
   Divider,
-  Tooltip
+  Tooltip,
+  LinearProgress,
+  Alert
 } from '@mui/material';
 import DescriptionIcon from '@mui/icons-material/Description';
 import WebIcon from '@mui/icons-material/Web';
@@ -27,6 +29,96 @@ import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PersonIcon from '@mui/icons-material/Person';
 import api from '../services/api';
+
+// Компонент для отображения статуса обработки документа
+const DocumentStatus = ({ status }) => {
+  // Определяем настройки отображения в зависимости от статуса
+  const getStatusConfig = () => {
+    switch (status) {
+      case 'processing':
+        return { 
+          color: 'primary', 
+          label: 'Извлечение текста...', 
+          showProgress: true, 
+          progress: 20 
+        };
+      case 'chunking':
+        return { 
+          color: 'primary', 
+          label: 'Разбиение на фрагменты...', 
+          showProgress: true, 
+          progress: 40 
+        };
+      case 'embedding':
+        return { 
+          color: 'primary', 
+          label: 'Создание эмбеддингов...', 
+          showProgress: true, 
+          progress: 70 
+        };
+      case 'indexing':
+        return { 
+          color: 'primary', 
+          label: 'Индексация документа...', 
+          showProgress: true, 
+          progress: 90 
+        };
+      case 'reindexing':
+        return { 
+          color: 'secondary', 
+          label: 'Переиндексация...', 
+          showProgress: true, 
+          progress: 50 
+        };
+      case 'indexed':
+        return { 
+          color: 'success', 
+          label: 'Обработан', 
+          showProgress: false 
+        };
+      case 'error':
+        return { 
+          color: 'error', 
+          label: 'Ошибка обработки', 
+          showProgress: false 
+        };
+      case 'uploaded':
+        return { 
+          color: 'info', 
+          label: 'Загружен, ожидает обработки', 
+          showProgress: true,
+          progress: 10
+        };
+      default:
+        return { 
+          color: 'info', 
+          label: status || 'Неизвестный статус', 
+          showProgress: false 
+        };
+    }
+  };
+
+  const config = getStatusConfig();
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: 200 }}>
+      <Chip
+        label={config.label}
+        size="small"
+        color={config.color}
+        variant="outlined"
+        sx={{ mt: 0.5, mb: config.showProgress ? 1 : 0 }}
+      />
+      {config.showProgress && (
+        <LinearProgress 
+          variant="determinate" 
+          value={config.progress} 
+          sx={{ height: 5, borderRadius: 5 }} 
+        />
+      )}
+    </Box>
+  );
+};
 
 function DocumentList({ 
   documents, 
@@ -115,6 +207,56 @@ function DocumentList({
   const allSelected = documents.length > 0 && selectedIds.length === documents.length;
   const selectedCount = selectedIds.length;
 
+  // Вычисляем, есть ли документы в процессе обработки
+  const hasProcessingDocuments = documents.some(doc => 
+    ['processing', 'chunking', 'embedding', 'indexing', 'uploaded', 'reindexing'].includes(doc.status)
+  );
+
+  // Проверяем, идет ли переиндексация
+  const isReindexing = documents.some(doc => doc.status === 'reindexing');
+
+  // Вычисляем общий прогресс обработки всех документов
+  const calculateTotalProgress = () => {
+    if (!hasProcessingDocuments) return 100;
+
+    const totalDocs = documents.length;
+    let progressSum = 0;
+    
+    documents.forEach(doc => {
+      if (doc.status === 'indexed' || doc.status === 'error') {
+        progressSum += 100;
+      } else {
+        // Определяем процент готовности для документа в обработке
+        switch (doc.status) {
+          case 'uploaded':
+            progressSum += 5;
+            break;
+          case 'processing':
+            progressSum += 25;
+            break;
+          case 'chunking':
+            progressSum += 50;
+            break;
+          case 'embedding':
+            progressSum += 75;
+            break;
+          case 'indexing':
+            progressSum += 90;
+            break;
+          case 'reindexing':
+            progressSum += 30; // Переиндексация - примерно 30% готовности
+            break;
+          default:
+            progressSum += 0;
+        }
+      }
+    });
+    
+    return totalDocs > 0 ? Math.floor(progressSum / totalDocs) : 0;
+  };
+
+  const totalProgress = calculateTotalProgress();
+
   return (
     <Paper elevation={2} sx={{ mb: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', p: 2, pb: 1 }}>
@@ -125,7 +267,7 @@ function DocumentList({
           sx={{ mr: 1 }}
         />
         <Typography variant="h6" sx={{ flex: 1 }}>
-          Загруженные документы
+          Загруженные документы {showOwner && ' (все пользователи)'}
         </Typography>
         {onDeleteSelected && (
           <Box>
@@ -141,6 +283,47 @@ function DocumentList({
           </Box>
         )}
       </Box>
+      
+      {/* Индикатор общего прогресса обработки */}
+      {hasProcessingDocuments ? (
+        <Box sx={{ px: 2, pb: 2 }}>
+          <Typography variant="body2" color="textSecondary" sx={{ mb: 1 }}>
+            Общий прогресс: {totalProgress}%
+          </Typography>
+          <LinearProgress 
+            variant="determinate" 
+            value={totalProgress} 
+            sx={{ height: 10, borderRadius: 5 }} 
+          />
+        </Box>
+      ) : (
+        documents.some(doc => doc.status === 'error') ? (
+          <Box sx={{ px: 2, py: 1, mb: 1 }}>
+            <Alert severity="warning">
+              Некоторые документы не удалось обработать. Проверьте детали, нажав на документ.
+            </Alert>
+          </Box>
+        ) : documents.length > 0 ? (
+          <Box sx={{ px: 2, py: 1, mb: 1 }}>
+            <Alert severity="success">
+              Все документы успешно обработаны и проиндексированы.
+            </Alert>
+          </Box>
+        ) : null
+      )}
+      
+      {/* Предупреждение о документах в обработке */}
+      {hasProcessingDocuments && (
+        <Box sx={{ px: 2, py: 1, mb: 1 }}>
+          <Alert severity="info">
+            {isReindexing ? 
+              "Идет переиндексация документов. Страница автоматически обновляется, ожидайте завершения." : 
+              "Некоторые документы находятся в процессе обработки. Страница автоматически обновляется, ожидайте завершения обработки."
+            }
+          </Alert>
+        </Box>
+      )}
+      
       <List sx={{ width: '100%' }}>
         {documents.map((doc, index) => (
           <React.Fragment key={doc.id}>
@@ -170,31 +353,46 @@ function DocumentList({
                 }
                 secondary={
                   <React.Fragment>
-                    <Chip
-                      label={doc.source}
-                      size="small"
-                      sx={{ mr: 1, fontSize: '0.75rem', mt: 0.5 }}
-                      color="primary"
-                      variant="outlined"
-                    />
-                    {showOwner && doc.uploader && (
-                      <Tooltip title="Пользователь, загрузивший документ">
-                        <Chip
-                          icon={<PersonIcon />}
-                          label={doc.uploader}
-                          size="small"
-                          sx={{ mr: 1, fontSize: '0.75rem', mt: 0.5 }}
-                          color="secondary"
-                          variant="outlined"
-                        />
-                      </Tooltip>
-                    )}
+                    <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                      <Chip
+                        label={doc.source || 'manual_upload'}
+                        size="small"
+                        sx={{ fontSize: '0.75rem' }}
+                        color="primary"
+                        variant="outlined"
+                      />
+                      {showOwner && doc.uploader && (
+                        <Tooltip title="Владелец документа">
+                          <Chip
+                            icon={<PersonIcon />}
+                            label={doc.uploader}
+                            size="small"
+                            sx={{ fontSize: '0.75rem' }}
+                            color="secondary"
+                            variant="outlined"
+                          />
+                        </Tooltip>
+                      )}
+                      
+                      {/* Добавляем индикатор статуса */}
+                      <DocumentStatus status={doc.status} />
+                    </Box>
+                    
                     <Box
                       component="span"
-                      sx={{ mt: 0.5, display: 'inline-block', color: 'text.secondary', fontSize: '0.875rem' }}
+                      sx={{ mt: 1, display: 'block', color: 'text.secondary', fontSize: '0.875rem' }}
                     >
                       Добавлен: {formatDate(doc.created_at)}
                     </Box>
+                    
+                    {doc.chunks_count > 0 && (
+                      <Box
+                        component="span"
+                        sx={{ display: 'block', color: 'text.secondary', fontSize: '0.875rem' }}
+                      >
+                        Фрагментов: {doc.chunks_count}
+                      </Box>
+                    )}
                   </React.Fragment>
                 }
                 secondaryTypographyProps={{ component: 'div' }}
@@ -211,6 +409,7 @@ function DocumentList({
           </React.Fragment>
         ))}
       </List>
+      
       {/* Диалог подробной информации */}
       <Dialog open={detailOpen} onClose={handleCloseDetail} maxWidth="sm" fullWidth>
         <DialogTitle>Информация о документе</DialogTitle>
@@ -225,7 +424,11 @@ function DocumentList({
             <Box>
               <Typography variant="subtitle1" sx={{ mb: 1 }}>{detail.title}</Typography>
               <Divider sx={{ mb: 1 }} />
-              <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Статус:</b> {detail.status}</Box>
+              
+              <Box sx={{ mb: 2 }}>
+                <DocumentStatus status={detail.status} />
+              </Box>
+              
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Имя файла:</b> {detail.filename || '-'}</Box>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Размер файла:</b> {detail.size ? `${(detail.size/1024).toFixed(1)} KB` : '-'}</Box>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Дата загрузки:</b> {detail.created_at ? new Date(detail.created_at).toLocaleString() : '-'}</Box>
@@ -236,8 +439,8 @@ function DocumentList({
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Кол-во чанков:</b> {detail.chunks_count}</Box>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Длина текста:</b> {detail.content_length} символов</Box>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Режим чанкинга:</b> {detail.chunking_mode || 'character'}</Box>
-              {showOwner && detail.user_id && (
-                <Box component="span" sx={{ display: 'block', mb: 1 }}><b>ID пользователя:</b> {detail.user_id}</Box>
+              {showOwner && detail.uploader && (
+                <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Владелец:</b> {detail.uploader} (ID: {detail.user_id})</Box>
               )}
               {detail.error_message && (
                 <Box component="span" sx={{ display: 'block', color: 'error.main', mb: 1 }}><b>Ошибка:</b> {detail.error_message}</Box>

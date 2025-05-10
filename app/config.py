@@ -32,6 +32,7 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-large")
 CROSS_ENCODER_MODEL = os.getenv("CROSS_ENCODER_MODEL", "cross-encoder/ms-marco-MiniLM-L-12-v2")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "400"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
+TOP_K_CHUNKS = int(os.getenv("TOP_K_CHUNKS", "7"))
 USE_HYBRID_SEARCH = os.getenv("USE_HYBRID_SEARCH", "true").lower() == "true"
 USE_RERANKER = os.getenv("USE_RERANKER", "true").lower() == "true"
 DENSE_WEIGHT = float(os.getenv("DENSE_WEIGHT", "0.6"))
@@ -85,7 +86,7 @@ class RagConfig:
     
     def __init__(self):
         """Инициализация конфигурации RAG."""
-        self.model_name = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
+        self.model_name = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-large")
         self.collection_name = os.getenv("QDRANT_COLLECTION", "documents")
         self.use_hybrid = os.getenv("USE_HYBRID_SEARCH", "true").lower() == "true"
         self.use_reranker = os.getenv("USE_RERANKER", "true").lower() == "true"
@@ -94,6 +95,7 @@ class RagConfig:
         self.sparse_weight = float(os.getenv("SPARSE_WEIGHT", "0.3"))
         self.reranker_weight = float(os.getenv("RERANKER_WEIGHT", "0.5"))
         self.max_context_docs = int(os.getenv("MAX_CONTEXT_DOCS", "5"))
+        self.top_k_chunks = int(os.getenv("TOP_K_CHUNKS", "7"))
         
         # Параметры символьного чанкера (для обратной совместимости)
         self.chunk_size = int(os.getenv("CHUNK_SIZE", "400"))
@@ -132,6 +134,7 @@ def get_config() -> Dict[str, Any]:
         "CROSS_ENCODER_MODEL": CROSS_ENCODER_MODEL,
         "CHUNK_SIZE": CHUNK_SIZE,
         "CHUNK_OVERLAP": CHUNK_OVERLAP,
+        "TOP_K_CHUNKS": TOP_K_CHUNKS,
         
         # Настройки для гибридного поиска
         "USE_HYBRID_SEARCH": USE_HYBRID_SEARCH,
@@ -171,6 +174,10 @@ def get_chunk_overlap() -> int:
     """Получение перекрытия чанков."""
     return get_config()["CHUNK_OVERLAP"]
 
+def get_top_k_chunks() -> int:
+    """Получение количества чанков для контекста."""
+    return get_config()["TOP_K_CHUNKS"]
+
 def create_rag_service_from_config(custom_config=None):
     """
     Фабричный метод для создания экземпляра RAGService с согласованными параметрами из конфигурации.
@@ -198,6 +205,7 @@ def create_rag_service_from_config(custom_config=None):
         sparse_weight=config.sparse_weight,
         reranker_weight=config.reranker_weight,
         max_context_docs=config.max_context_docs,
+        top_k_chunks=config.top_k_chunks,
         chunk_size=config.chunk_size,
         chunk_overlap=config.chunk_overlap,
         use_token_chunker=config.chunking_mode == "token",

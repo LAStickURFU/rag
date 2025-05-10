@@ -564,21 +564,28 @@ class OllamaLLM:
 # Глобальный экземпляр для использования в приложении
 _ollama_instance = None
 
-def get_ollama_instance(model_name: str = None) -> OllamaLLM:
+def get_ollama_instance(model_name: str = None, force_new: bool = False) -> OllamaLLM:
     """
-    Возвращает глобальный экземпляр OllamaLLM.
+    Создает или возвращает кешированный экземпляр OllamaLLM.
     
     Args:
-        model_name: Если указан, создает новый экземпляр с указанной моделью
-        
+        model_name: Имя модели для использования (если None, используется значение из .env)
+        force_new: Принудительно создать новый экземпляр (при переключении модели)
+    
     Returns:
-        Экземпляр OllamaLLM
+        Экземпляр OllamaLLM с указанной моделью
     """
     global _ollama_instance
     
-    if _ollama_instance is None or model_name is not None:
-        model = model_name or os.getenv("OLLAMA_MODEL", "mistral")
-        _ollama_instance = OllamaLLM(model)
+    if model_name is None:
+        # Если модель не указана, используем значение из переменной окружения
+        model_name = os.getenv("OLLAMA_MODEL", "mistral:7b-instruct")
+    
+    # Проверяем, нужно ли создать новый экземпляр
+    if _ollama_instance is None or force_new or _ollama_instance.model_name != model_name:
+        # Создаем новый экземпляр
+        _ollama_instance = OllamaLLM(model_name)
+        logger.info(f"Created new OllamaLLM instance with model {model_name}")
     
     return _ollama_instance
 

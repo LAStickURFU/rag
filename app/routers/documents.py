@@ -8,8 +8,11 @@ import uuid
 import mimetypes
 from typing import List, Optional
 from datetime import datetime
+import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -25,21 +28,156 @@ logger = logging.getLogger(__name__)
 # Создание роутера
 router = APIRouter(prefix="/documents", tags=["documents"])
 
+# Создание пула потоков для обработки документов
+document_executor = ThreadPoolExecutor(max_workers=2)
+
 # Получение RAG-сервиса из модуля routers.rag
 def get_rag_service():
     """Получает экземпляр RAG-сервиса"""
     from app.routers.rag import get_rag_service as rag_get_rag_service
     return rag_get_rag_service()
 
+def process_document_background(document_id, file_content, file_name, user_id, doc_uuid):
+    """
+    Фоновая функция для обработки документа. Запускается в отдельном потоке.
+    """
+    logger.info(f"Начало фоновой обработки документа {document_id}, имя файла: {file_name}")
+    
+    # Создаем новую сессию БД для этого потока
+    from app.database import get_db
+    db = next(get_db())
+    
+    try:
+        # Получаем документ по ID
+        document = db.query(DocumentModel).filter(DocumentModel.id == document_id).first()
+        if not document:
+            logger.error(f"Документ {document_id} не найден в БД")
+            return
+        
+        # Обновляем статус на "обработка"
+        document.status = "processing"
+        db.commit()
+        logger.info(f"Документ {document_id} статус изменен на 'processing'")
+        
+        # Извлекаем текст из файла
+        try:
+            logger.info(f"Начинаем извлечение текста из {file_name}")
+            
+            # Создаём файлоподобный объект из контента
+            from io import BytesIO
+            file_object = BytesIO(file_content)
+            file_object.filename = file_name  # Устанавливаем имя файла
+            
+            # Импортируем функцию для извлечения текста
+            from app.utils.parser.document_parser import extract_text
+            
+            text_content = extract_text(file_object, file_content)
+            logger.info(f"Текст успешно извлечен, длина: {len(text_content)} символов")
+            
+            # После успешного извлечения текста обновляем запись
+            document.content = text_content
+            document.status = "chunking"  # Меняем статус на "разбиение на чанки"
+            db.commit()
+            logger.info(f"Документ {document_id} статус изменен на 'chunking'")
+            
+        except Exception as e:
+            logger.error(f"Ошибка извлечения текста из {file_name}: {str(e)}", exc_info=True)
+            document.status = "error"
+            document.error_message = f"Ошибка при извлечении текста: {str(e)}"
+            db.commit()
+            return
+        
+        # Добавляем документ в RAG-индекс
+        try:
+            rag_service = get_rag_service()
+            logger.info(f"Получен сервис RAG для документа {document_id}")
+                        
+            # Получаем текущие настройки RAG-сервиса для метаданных
+            current_settings = {
+                "chunking_mode": rag_service.chunking_mode,
+                "chunk_size": rag_service.chunk_size,
+                "chunk_overlap": rag_service.chunk_overlap,
+                "embedding_model": rag_service.model_name,
+                "use_hybrid_search": rag_service.use_hybrid,
+                "reranker_weight": rag_service.reranker_weight,
+                "dense_weight": rag_service.dense_weight,
+                "sparse_weight": getattr(rag_service, 'sparse_weight', 0.3),
+            }
+            
+            # Создаем документ для RAG
+            from app.rag import Document as RagDocument
+            rag_doc = RagDocument(
+                text=text_content,
+                metadata={
+                    "title": document.title,
+                    "source": "manual_upload",
+                    "filename": document.file_name,
+                    "filetype": document.processing_params.get("content_type") if document.processing_params else "text/plain",
+                    "user_id": user_id,
+                    "doc_id": doc_uuid,
+                    "chunking_mode": current_settings["chunking_mode"]
+                }
+            )
+            
+            # Обновляем статус на "создание эмбеддингов"
+            document.status = "embedding"
+            db.commit()
+            logger.info(f"Документ {document_id} статус изменен на 'embedding'")
+            
+            # Индексируем документ
+            logger.info(f"Начинаем индексацию документа {document_id}")
+            chunks = rag_service.add_document(rag_doc, doc_id=doc_uuid)
+            logger.info(f"Документ {document_id} успешно индексирован, создано {len(chunks) if chunks else 0} фрагментов")
+            
+            # Обновляем статус и количество чанков
+            document.status = "indexed"
+            document.chunks_count = len(chunks) if chunks else 0
+            
+            # Сохраняем метаинформацию о процессе обработки
+            document.chunking_mode = current_settings["chunking_mode"]
+            document.chunk_size = current_settings["chunk_size"]
+            document.chunk_overlap = current_settings["chunk_overlap"]
+            document.embedding_model = current_settings["embedding_model"]
+            
+            # Сохраняем дополнительные параметры в JSON
+            document.processing_params = {
+                "use_hybrid_search": current_settings["use_hybrid_search"],
+                "reranker_weight": current_settings["reranker_weight"],
+                "dense_weight": current_settings["dense_weight"],
+                "sparse_weight": current_settings["sparse_weight"],
+                "uploaded_at": datetime.utcnow().isoformat(),
+                "processed_at": datetime.utcnow().isoformat(),
+            }
+            
+            # Логируем информацию о загрузке
+            logger.info(f"Документ {document.id} ({document.title}) успешно загружен: режим={document.chunking_mode}, чанков={document.chunks_count}")
+            
+            db.commit()
+            logger.info(f"Документ {document_id} статус изменен на 'indexed'")
+            
+        except Exception as e:
+            logger.error(f"Ошибка индексирования документа {file_name}: {str(e)}", exc_info=True)
+            document.status = "error"
+            document.error_message = f"Ошибка индексирования: {str(e)}"
+            db.commit()
+    
+    except Exception as e:
+        logger.error(f"Общая ошибка в process_document_background для документа {document_id}: {str(e)}", exc_info=True)
+    finally:
+        db.close()
+        logger.info(f"Завершена обработка документа {document_id}")
+
 @router.post("/upload")
 async def upload_documents(
     files: List[UploadFile] = File(...),
     titles: List[str] = Form(...),
     current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None
 ):
     """
-    Загружает документы в систему и индексирует их для RAG.
+    Загружает документы в систему и запускает их асинхронную обработку.
+    Сразу возвращает информацию о созданных документах, пока они еще обрабатываются в фоне.
     """
     if len(files) != len(titles):
         raise HTTPException(
@@ -90,122 +228,38 @@ async def upload_documents(
                 file_name=safe_filename,
                 file_size=len(file_content),
                 uuid=doc_uuid,
-                status="processing"  # Статус "в обработке"
+                status="uploaded"  # Начальный статус "загружен"
             )
+
+            # Сохраняем начальную метаинформацию
+            document.processing_params = {
+                "content_type": content_type,
+                "uploaded_at": datetime.utcnow().isoformat()
+            }
             
             db.add(document)
             db.commit()
             db.refresh(document)
             
-            # Извлекаем текст из файла
-            text_content = ""
-            try:
-                logger.info(f"Начинаем извлечение текста из {file.filename}")
-                text_content = extract_text(file, file_content)
-                logger.info(f"Текст успешно извлечен, длина: {len(text_content)} символов")
-                
-                # После успешного извлечения текста обновляем запись
-                document.content = text_content
-                document.status = "indexing"  # Меняем статус на "индексируется"
-                db.commit()
-                
-            except Exception as e:
-                logger.error(f"Ошибка извлечения текста из {file.filename}: {str(e)}")
-                document.status = "error"
-                document.error_message = str(e)
-                db.commit()
-                
-                results.append({
-                    "id": document.id,
-                    "title": document.title,
-                    "filename": document.file_name,
-                    "error": str(e),
-                    "status": "error"
-                })
-                continue  # Переходим к следующему файлу
-
-            # Добавляем документ в RAG-индекс
-            try:
-                rag_service = get_rag_service()
-                
-                # Получаем текущие настройки RAG-сервиса для метаданных
-                current_settings = {
-                    "chunking_mode": rag_service.chunking_mode,
-                    "chunk_size": rag_service.chunk_size,
-                    "chunk_overlap": rag_service.chunk_overlap,
-                    "embedding_model": rag_service.model_name,
-                    "use_hybrid_search": rag_service.use_hybrid,
-                    "reranker_weight": rag_service.reranker_weight,
-                    "dense_weight": rag_service.dense_weight,
-                    "sparse_weight": getattr(rag_service, 'sparse_weight', 0.3),
-                }
-                
-                # Создаем документ для RAG
-                from app.rag import Document as RagDocument
-                rag_doc = RagDocument(
-                    text=text_content,
-                    metadata={
-                        "title": title,
-                        "source": "manual_upload",
-                        "filename": safe_filename,
-                        "filetype": content_type,
-                        "user_id": current_user.id,
-                        "doc_id": doc_uuid,
-                        "chunking_mode": current_settings["chunking_mode"]
-                    }
-                )
-                
-                # Индексируем документ
-                chunks = rag_service.add_document(rag_doc, doc_id=doc_uuid)
-                
-                # Обновляем статус и количество чанков
-                document.status = "indexed"
-                document.chunks_count = len(chunks) if chunks else 0
-                
-                # Сохраняем метаинформацию о процессе обработки
-                document.chunking_mode = current_settings["chunking_mode"]
-                document.chunk_size = current_settings["chunk_size"]
-                document.chunk_overlap = current_settings["chunk_overlap"]
-                document.embedding_model = current_settings["embedding_model"]
-                
-                # Сохраняем дополнительные параметры в JSON
-                document.processing_params = {
-                    "use_hybrid_search": current_settings["use_hybrid_search"],
-                    "reranker_weight": current_settings["reranker_weight"],
-                    "dense_weight": current_settings["dense_weight"],
-                    "sparse_weight": current_settings["sparse_weight"],
-                    "uploaded_at": datetime.utcnow().isoformat(),
-                    "content_type": content_type
-                }
-                
-                # Логируем информацию о загрузке
-                logger.info(f"Документ {document.id} ({document.title}) успешно загружен: режим={document.chunking_mode}, чанков={document.chunks_count}")
-                
-                db.commit()
-                
-                # Добавляем результат
-                results.append({
-                    "id": document.id,
-                    "title": document.title,
-                    "filename": document.file_name,
-                    "size": document.file_size,
-                    "chunks_count": document.chunks_count,
-                    "status": document.status
-                })
-                
-            except Exception as e:
-                logger.error(f"Ошибка индексирования документа {file.filename}: {str(e)}")
-                document.status = "error"
-                document.error_message = f"Ошибка индексирования: {str(e)}"
-                db.commit()
-                
-                results.append({
-                    "id": document.id,
-                    "title": document.title,
-                    "filename": document.file_name,
-                    "error": str(e),
-                    "status": "error"
-                })
+            # Запускаем обработку документа в фоновом режиме
+            document_executor.submit(
+                process_document_background,
+                document.id,
+                file_content,
+                safe_filename,
+                current_user.id,
+                doc_uuid
+            )
+            
+            # Добавляем информацию о документе в результат
+            results.append({
+                "id": document.id,
+                "title": document.title,
+                "filename": document.file_name,
+                "size": document.file_size,
+                "status": document.status,
+                "uuid": document.uuid
+            })
             
         except Exception as e:
             # Эта часть обрабатывает ошибки, возникшие до создания документа в БД
@@ -256,7 +310,7 @@ async def upload_documents(
                     "status": "error"
                 })
     
-    return {"status": "success", "documents": results}
+    return {"status": "success", "documents": results, "message": "Документы приняты на обработку"}
 
 @router.get("")
 async def get_documents(
@@ -288,8 +342,13 @@ async def get_documents(
     result = []
     for doc in documents:
         # Получаем данные о пользователе, загрузившем документ
-        uploader = db.query(UserModel).filter(UserModel.id == doc.user_id).first()
-        uploader_name = uploader.username if uploader else "Unknown"
+        show_owner_info = current_user.role == "admin"  # Для админов всегда показываем владельца
+        
+        uploader = None
+        uploader_name = "Unknown"
+        if show_owner_info:
+            uploader = db.query(UserModel).filter(UserModel.id == doc.user_id).first()
+            uploader_name = uploader.username if uploader else "Unknown"
         
         result.append({
             "id": doc.id,
@@ -300,8 +359,8 @@ async def get_documents(
             "status": doc.status,
             "created_at": doc.created_at.isoformat() if doc.created_at else None,
             "uuid": doc.uuid,
-            "user_id": doc.user_id,
-            "uploader": uploader_name,
+            "user_id": doc.user_id if show_owner_info else None,
+            "uploader": uploader_name if show_owner_info else None,
             "chunking_mode": doc.chunking_mode,
             "embedding_model": doc.embedding_model,
             "processing_summary": {
@@ -320,9 +379,8 @@ async def reindex_documents(
     all_users: bool = False
 ):
     """
-    Переиндексирует документы пользователя.
-    Если пользователь администратор и указан параметр all_users=True,
-    переиндексирует документы всех пользователей.
+    Запускает асинхронную переиндексацию документов пользователя или всех документов.
+    Сразу возвращает статус, а обработка продолжается в фоне.
     """
     try:
         # Проверяем права на переиндексацию всех документов
@@ -343,6 +401,46 @@ async def reindex_documents(
         if not documents:
             return {"status": "success", "message": "Нет документов для индексации"}
         
+        # Устанавливаем статус "reindexing" для всех документов
+        for doc in documents:
+            doc.status = "reindexing"
+        db.commit()
+
+        # Запускаем переиндексацию в фоновом потоке
+        document_executor.submit(
+            reindex_documents_background,
+            documents_ids=[doc.id for doc in documents],
+            all_users=all_users,
+            user_id=current_user.id
+        )
+        
+        return {
+            "status": "success", 
+            "message": f"Запущена переиндексация {len(documents)} документов. Обработка продолжается в фоне.",
+            "documents_count": len(documents)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error during reindexing: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при переиндексации: {str(e)}"
+        )
+
+def reindex_documents_background(documents_ids, all_users, user_id):
+    """
+    Фоновая функция для переиндексации документов.
+    """
+    logger.info(f"Начало фоновой переиндексации документов. Всего документов: {len(documents_ids)}")
+    
+    # Создаем новую сессию БД для этого потока
+    from app.database import get_db
+    db = next(get_db())
+    
+    try:
+        # Получаем все документы
+        documents = db.query(DocumentModel).filter(DocumentModel.id.in_(documents_ids)).all()
+        
         # Очищаем индекс
         rag_service = get_rag_service()
         rag_service.clear_index()
@@ -350,13 +448,14 @@ async def reindex_documents(
         # Индексируем каждый документ
         reindexed_count = 0
         total_chunks = 0
-        for doc in documents:
+        
+        for idx, doc in enumerate(documents):
+            progress_pct = int((idx / len(documents)) * 100)
+            logger.info(f"Переиндексация документа {idx+1}/{len(documents)} ({progress_pct}%)")
+            
             if not doc.content:
+                logger.warning(f"Документ {doc.id} не содержит текста, пропускаем")
                 continue
-                
-            # Меняем статус на "индексируется"
-            doc.status = "indexing"
-            db.commit()
             
             try:
                 # Создаем документ для RAG
@@ -417,26 +516,44 @@ async def reindex_documents(
                 total_chunks += chunks_count
                 reindexed_count += 1
                 
+                # Сохраняем промежуточный результат после каждого документа
+                db.commit()
+                
             except Exception as e:
-                logger.error(f"Error reindexing document {doc.id}: {str(e)}")
+                logger.error(f"Error reindexing document {doc.id}: {str(e)}", exc_info=True)
                 doc.status = "error"
                 doc.error_message = str(e)
                 
-            db.commit()
+                # Сохраняем информацию об ошибке
+                db.commit()
+                
+        # После завершения переиндексации всех документов
+        # Еще раз явно проверяем и устанавливаем статус всех документов
+        for doc_id in documents_ids:
+            doc = db.query(DocumentModel).filter(DocumentModel.id == doc_id).first()
+            if doc and doc.status == "reindexing":
+                # Если документ остался в статусе reindexing, значит произошла ошибка
+                doc.status = "error"
+                doc.error_message = "Переиндексация не была завершена корректно"
+                db.commit()
         
-        return {
-            "status": "success", 
-            "message": f"Переиндексировано {reindexed_count} из {len(documents)} документов",
-            "indexed_documents": reindexed_count,
-            "total_chunks": total_chunks
-        }
-        
+        logger.info(f"Завершена переиндексация документов. Обработано: {reindexed_count}/{len(documents)}, создано чанков: {total_chunks}")
+            
     except Exception as e:
-        logger.error(f"Error during reindexing: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Ошибка при переиндексации: {str(e)}"
-        )
+        logger.error(f"Общая ошибка при переиндексации документов: {str(e)}", exc_info=True)
+        
+        # В случае общей ошибки переводим все документы в состояние ошибки
+        try:
+            for doc_id in documents_ids:
+                doc = db.query(DocumentModel).filter(DocumentModel.id == doc_id).first()
+                if doc and doc.status == "reindexing":
+                    doc.status = "error"
+                    doc.error_message = f"Ошибка при переиндексации: {str(e)}"
+            db.commit()
+        except Exception as commit_error:
+            logger.error(f"Не удалось обновить статусы документов: {str(commit_error)}", exc_info=True)
+    finally:
+        db.close()
 
 @router.delete("/{document_id}")
 async def delete_document(
@@ -528,17 +645,29 @@ async def get_document_detail(
 ):
     """
     Получает детальную информацию о документе.
+    Администраторы могут просматривать информацию о любом документе.
     """
-    document = db.query(DocumentModel).filter(
-        DocumentModel.id == document_id,
-        DocumentModel.user_id == current_user.id
-    ).first()
+    # Формируем запрос в зависимости от роли пользователя
+    query = db.query(DocumentModel).filter(DocumentModel.id == document_id)
+    
+    # Для обычных пользователей фильтруем только их документы
+    if current_user.role != "admin":
+        query = query.filter(DocumentModel.user_id == current_user.id)
+    
+    document = query.first()
     
     if not document:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Документ не найден или доступ запрещен"
         )
+    
+    # Получаем данные о пользователе, загрузившем документ (для админов)
+    uploader = None
+    uploader_name = None
+    if current_user.role == "admin":
+        uploader = db.query(UserModel).filter(UserModel.id == document.user_id).first()
+        uploader_name = uploader.username if uploader else "Unknown"
     
     # Возвращаем детали документа, но без полного содержимого для экономии трафика
     content_preview = document.content[:500] + "..." if document.content and len(document.content) > 500 else document.content
@@ -557,7 +686,7 @@ async def get_document_detail(
     # Дополнительные параметры из JSON
     processing_info = document.processing_params or {}
     
-    return {
+    result = {
         "id": document.id,
         "title": document.title,
         "filename": document.file_name or "-",
@@ -574,4 +703,11 @@ async def get_document_detail(
         "chunking_mode": document.chunking_mode,
         "chunking_info": chunking_info,
         "processing_info": processing_info
-    } 
+    }
+    
+    # Добавляем информацию о владельце для администраторов
+    if current_user.role == "admin":
+        result["user_id"] = document.user_id
+        result["uploader"] = uploader_name
+    
+    return result 

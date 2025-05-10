@@ -11,7 +11,7 @@ import {
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 
-function FileUpload({ onUpload, loading }) {
+function FileUpload({ onUpload, loading, disabled }) {
   const [titles, setTitles] = useState([]);
   const [files, setFiles] = useState([]);
   const [error, setError] = useState('');
@@ -27,6 +27,8 @@ function FileUpload({ onUpload, loading }) {
   const ACCEPT_STRING = SUPPORTED_EXTENSIONS.map(ext => '.' + ext).join(',');
 
   const handleFileChange = (e) => {
+    if (disabled) return;
+    
     const selectedFiles = Array.from(e.target.files || []);
     if (selectedFiles.length === 0) return;
     
@@ -60,6 +62,8 @@ function FileUpload({ onUpload, loading }) {
   };
 
   const handleDrag = (e) => {
+    if (disabled) return;
+    
     e.preventDefault();
     e.stopPropagation();
     if (e.type === 'dragenter' || e.type === 'dragover') {
@@ -70,6 +74,8 @@ function FileUpload({ onUpload, loading }) {
   };
 
   const handleDrop = (e) => {
+    if (disabled) return;
+    
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
@@ -79,12 +85,16 @@ function FileUpload({ onUpload, loading }) {
   };
 
   const handleTitleChange = (idx, value) => {
+    if (disabled) return;
+    
     const arr = [...titles];
     arr[idx] = value;
     setTitles(arr);
   };
   
   const handleRemoveFile = (idx) => {
+    if (disabled) return;
+    
     setFiles(files.filter((_, i) => i !== idx));
     setTitles(titles.filter((_, i) => i !== idx));
   };
@@ -92,6 +102,8 @@ function FileUpload({ onUpload, loading }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     e.stopPropagation(); // Добавляем остановку всплытия событий
+    
+    if (disabled) return;
     
     // Двойная проверка на повторную отправку
     if (submitting || loading || isSubmittingRef.current) {
@@ -149,7 +161,7 @@ function FileUpload({ onUpload, loading }) {
   };
 
   // Проверяем, отключена ли форма
-  const isFormDisabled = loading || submitting;
+  const isFormDisabled = loading || submitting || disabled;
 
   return (
     <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
@@ -158,11 +170,17 @@ function FileUpload({ onUpload, loading }) {
       </Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }} data-testid="upload-error">{error}</Alert>}
       {success && <Alert severity="success" sx={{ mb: 2 }}>Документы успешно загружены!</Alert>}
+      {disabled && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Загрузка новых документов временно недоступна, так как система обрабатывает существующие документы. 
+          Пожалуйста, дождитесь завершения текущих процессов.
+        </Alert>
+      )}
       <Box
         component="form"
         onSubmit={handleSubmit}
         onDragEnter={handleDrag}
-        sx={{ position: 'relative' }}
+        sx={{ position: 'relative', opacity: isFormDisabled ? 0.7 : 1 }}
         ref={formRef}
       >
         <Box

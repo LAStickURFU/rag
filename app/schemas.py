@@ -66,6 +66,23 @@ class ModelSettings(BaseModel):
     max_tokens: int = 2048
     top_k_chunks: int = 5
     context_window: int = 8192  # Максимальный размер контекста (в токенах)
+    model_name: str = "mistral:7b-instruct"  # Выбранная модель
+
+
+class ModelInfo(BaseModel):
+    """Информация о доступной модели."""
+    name: str
+    size: Optional[str] = None
+    modified_at: Optional[str] = None
+    description: Optional[str] = None
+    quantization: Optional[str] = None
+    is_active: bool = False  # Флаг, указывающий, что модель активна в данный момент
+
+
+class AvailableModelsResponse(BaseModel):
+    """Ответ со списком доступных моделей."""
+    models: List[ModelInfo]
+    active_model: str  # Название текущей активной модели
 
 
 class ChunkInfo(BaseModel):

@@ -13,19 +13,34 @@ from odf.opendocument import load as odf_load
 from odf.text import P
 from ebooklib import epub
 
-def extract_text(file, contents: bytes) -> str:
+def extract_text(file, contents: bytes, file_name=None) -> str:
     """
     Извлекает текст из файла различных форматов.
     
     Args:
-        file: Объект файла с атрибутом filename
+        file: Объект файла с атрибутом filename или None
         contents: Содержимое файла в байтах
+        file_name: Имя файла (используется, если file is None)
     
     Returns:
         Текстовое содержимое файла
     """
     import traceback
-    ext = file.filename.lower().split('.')[-1]
+    
+    # Определяем имя файла
+    filename = None
+    if file and hasattr(file, 'filename'):
+        filename = file.filename
+    elif file and hasattr(file, 'name'):
+        filename = file.name
+    elif file_name:
+        filename = file_name
+    else:
+        raise ValueError("Не удалось определить имя файла")
+    
+    # Получаем расширение
+    ext = filename.lower().split('.')[-1]
+    
     if ext in ['txt', 'md', 'log', 'tex', 'jsonl']:
         return contents.decode('utf-8', errors='ignore')
     elif ext == 'pdf':
@@ -51,7 +66,7 @@ def extract_text(file, contents: bytes) -> str:
         except Exception as e:
             # Подробно логируем ошибку для отладки
             error_details = traceback.format_exc()
-            print(f"Ошибка при обработке PDF {file.filename}: {str(e)}\n{error_details}")
+            print(f"Ошибка при обработке PDF {filename}: {str(e)}\n{error_details}")
             raise Exception(f"Ошибка при чтении PDF: {str(e)}")
     elif ext in ['doc', 'docx']:
         doc = DocxDocument(BytesIO(contents))
@@ -85,7 +100,7 @@ def extract_text(file, contents: bytes) -> str:
                     text.append(soup.get_text(separator='\n', strip=True))
             return '\n\n'.join(text)
         except Exception as e:
-            print(f"Ошибка при обработке EPUB {file.filename}: {str(e)}")
+            print(f"Ошибка при обработке EPUB {filename}: {str(e)}")
             raise Exception(f"Ошибка при чтении EPUB: {str(e)}")
     elif ext == 'odt':
         try:
@@ -95,7 +110,7 @@ def extract_text(file, contents: bytes) -> str:
                 text.append(paragraph.firstChild.data if paragraph.firstChild else '')
             return '\n'.join(text)
         except Exception as e:
-            print(f"Ошибка при обработке ODT {file.filename}: {str(e)}")
+            print(f"Ошибка при обработке ODT {filename}: {str(e)}")
             raise Exception(f"Ошибка при чтении ODT: {str(e)}")
     else:
         return contents.decode('utf-8', errors='ignore') 

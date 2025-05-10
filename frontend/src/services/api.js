@@ -274,4 +274,24 @@ export const deleteUser = async (username) => {
   }
 };
 
+// Получение списка доступных моделей
+export const getAvailableModels = async () => {
+  try {
+    const response = await api.get('/model/available');
+    return response.data;
+  } catch (error) {
+    throw error.response ? error.response.data : new Error('Ошибка при получении списка моделей');
+  }
+};
+
+// Переключение на другую модель
+export const switchModel = async (modelName) => {
+  try {
+    const response = await api.post(`/model/switch/${modelName}`);
+    return response.data;
+  } catch (error) {
+    throw error.response ? error.response.data : new Error('Ошибка при переключении модели');
+  }
+};
+
 export default api;

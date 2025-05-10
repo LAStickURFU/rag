@@ -13,6 +13,7 @@ import { askQuestion, getChatHistory, askDirectQuestion, clearChatHistory } from
 import ChatInput from '../components/ChatInput';
 import MessageItem from '../components/MessageItem';
 import ModelSettings from '../components/ModelSettings';
+import ModelSelector from '../components/ModelSelector';
 import RelevantChunks from '../components/RelevantChunks';
 import DeleteIcon from '@mui/icons-material/Delete';
 import Tooltip from '@mui/material/Tooltip';
@@ -209,6 +210,7 @@ function ChatPage() {
             </Alert>
           )}
          
+          <ModelSelector />
           <ModelSettings />
           <ChatInput
             onSendMessage={handleSendMessage}

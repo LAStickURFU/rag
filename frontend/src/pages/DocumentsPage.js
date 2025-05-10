@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container,
   Typography,
@@ -7,7 +7,9 @@ import {
   Button,
   Snackbar,
   FormControlLabel,
-  Switch
+  Switch,
+  CircularProgress,
+  Paper
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
@@ -26,28 +28,79 @@ function DocumentsPage() {
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'success' });
   const [selectedIds, setSelectedIds] = useState([]);
   const [showAllDocs, setShowAllDocs] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(false);
   const { isAdmin } = useAuth();
 
-  // Загрузка списка документов при монтировании или изменении фильтра
-  useEffect(() => {
-    fetchDocuments();
-  }, [showAllDocs]);
-
-  // Получение списка документов
-  const fetchDocuments = async () => {
-    setLoading(true);
+  // Преобразуем fetchDocuments в useCallback для использования в эффектах
+  const fetchDocuments = useCallback(async () => {
     setError('');
-   
     try {
       const docs = await getDocuments(isAdmin() && showAllDocs);
       setDocuments(docs);
+      return docs;
     } catch (err) {
       setError('Не удалось загрузить список документов');
       console.error(err);
+      return [];
     } finally {
       setLoading(false);
     }
-  };
+  }, [isAdmin, showAllDocs]);
+
+  // Отдельный эффект для автоматического обновления при загрузке страницы
+  useEffect(() => {
+    // При первой загрузке получаем документы
+    setLoading(true);
+    fetchDocuments();
+  }, [fetchDocuments]);
+
+  // Отдельный эффект для интервального обновления
+  useEffect(() => {
+    console.log("Настройка интервального обновления документов");
+    
+    // Создаем интервал для автоматического обновления каждые 2 секунды
+    const autoRefreshInterval = setInterval(() => {
+      // Проверяем, есть ли документы в обработке
+      const hasProcessingDocs = documents.some(doc => 
+        ['processing', 'chunking', 'embedding', 'indexing', 'uploaded', 'reindexing'].includes(doc.status)
+      );
+      
+      // Логируем для отладки
+      console.log(`Проверка документов: ${hasProcessingDocs ? 'есть в обработке' : 'все готовы'}, refreshInterval: ${refreshInterval}`);
+      
+      if (hasProcessingDocs) {
+        // Если документы обрабатываются, обновляем список
+        console.log('Автообновление: есть документы в обработке');
+        fetchDocuments();
+        
+        // Показываем уведомление при первом обнаружении документов в обработке
+        if (!refreshInterval) {
+          console.log('Показываем уведомление о начале обработки');
+          setNotification({
+            open: true,
+            message: 'Документы обрабатываются. Страница автоматически обновляется.',
+            severity: 'info'
+          });
+          setRefreshInterval(true);
+        }
+      } else if (refreshInterval) {
+        // Если все документы обработаны, но интервал был активен
+        console.log('Автообновление: все документы обработаны, останавливаем');
+        setNotification({
+          open: true,
+          message: 'Все документы обработаны и проиндексированы',
+          severity: 'success'
+        });
+        setRefreshInterval(false);
+      }
+    }, 2000); // Интервал 2 секунды
+    
+    // Очистка интервала при размонтировании
+    return () => {
+      console.log("Очистка интервала обновления документов");
+      clearInterval(autoRefreshInterval);
+    };
+  }, [documents, refreshInterval, fetchDocuments]); // documents изменяется при каждом fetchDocuments
 
   // Загрузка нового документа
   const handleUploadDocument = async (titles, files) => {
@@ -58,6 +111,14 @@ function DocumentsPage() {
       await uploadDocuments(titles, files);
       // После успешной загрузки обновляем список документов
       await fetchDocuments();
+      
+      // Показываем уведомление о начале обработки
+      setNotification({
+        open: true,
+        message: 'Документы загружены и отправлены на обработку',
+        severity: 'info'
+      });
+      
       return true;
     } catch (err) {
       const errorMessage = err.message || 'Ошибка при загрузке документов';
@@ -68,6 +129,11 @@ function DocumentsPage() {
     }
   };
 
+  // Проверяем, есть ли документы в процессе обработки
+  const hasProcessingDocuments = documents.some(doc => 
+    ['processing', 'chunking', 'embedding', 'indexing', 'uploaded', 'reindexing'].includes(doc.status)
+  );
+
   // Переиндексация документов
   const handleReindexDocuments = async () => {
     setReindexing(true);
@@ -75,11 +141,22 @@ function DocumentsPage() {
    
     try {
       const result = await reindexDocuments(isAdmin() && showAllDocs);
+      console.log('Запущена переиндексация документов:', result);
+      
       setNotification({
         open: true,
-        message: `Переиндексировано ${result.indexed_documents} документов, создано ${result.total_chunks} фрагментов`,
-        severity: 'success'
+        message: result.message || 'Запущена переиндексация документов',
+        severity: 'info'
       });
+      
+      // Сразу обновляем список документов, чтобы увидеть статус "reindexing"
+      setLoading(true);
+      await fetchDocuments();
+      
+      // Запускаем автоматическое обновление, если оно не активно
+      setRefreshInterval(true);
+      
+      console.log('Запущено автоматическое обновление для отслеживания переиндексации');
     } catch (err) {
       const errorMessage = err.message || 'Ошибка при переиндексации документов';
       setError(errorMessage);
@@ -103,7 +180,7 @@ function DocumentsPage() {
     setError('');
    
     try {
-      const result = await clearRagIndex();
+      await clearRagIndex();
       setNotification({
         open: true,
         message: `Индекс векторной базы успешно очищен`,
@@ -197,6 +274,12 @@ function DocumentsPage() {
     setShowAllDocs(event.target.checked);
   };
 
+  // Ручное обновление списка документов
+  const handleRefreshDocuments = async () => {
+    setLoading(true);
+    await fetchDocuments();
+  };
+
   return (
     <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -210,7 +293,7 @@ function DocumentsPage() {
               variant="outlined"
               color="secondary"
               onClick={handleDeleteAllDocuments}
-              disabled={clearing}
+              disabled={clearing || hasProcessingDocuments}
               sx={{ mr: 2 }}
             >
               Удалить все документы
@@ -221,7 +304,7 @@ function DocumentsPage() {
             color="error"
             startIcon={<DeleteSweepIcon />}
             onClick={handleClearIndex}
-            disabled={clearing}
+            disabled={clearing || hasProcessingDocuments}
             sx={{ mr: 2 }}
           >
             Очистить индекс
@@ -231,7 +314,7 @@ function DocumentsPage() {
             color="primary"
             startIcon={<RefreshIcon />}
             onClick={handleReindexDocuments}
-            disabled={reindexing}
+            disabled={reindexing || hasProcessingDocuments}
           >
             Переиндексировать
           </Button>
@@ -260,10 +343,29 @@ function DocumentsPage() {
       
       {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
       
+      {/* Отображение прогресса автоматического обновления */}
+      {hasProcessingDocuments && refreshInterval && (
+        <Paper elevation={1} sx={{ p: 2, mb: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <CircularProgress size={24} sx={{ mr: 2 }} />
+            <Typography>Обработка документов в процессе... Страница обновляется автоматически</Typography>
+          </Box>
+          <Button 
+            variant="text" 
+            color="primary"
+            onClick={handleRefreshDocuments}
+            startIcon={<RefreshIcon />}
+          >
+            Обновить
+          </Button>
+        </Paper>
+      )}
+      
       <Box sx={{ mb: 4 }}>
         <FileUpload
           onUpload={handleUploadDocument}
           loading={uploading}
+          disabled={hasProcessingDocuments}
         />
       </Box>
       
@@ -275,7 +377,7 @@ function DocumentsPage() {
         onSelect={handleSelect}
         onSelectAll={handleSelectAll}
         onDeleteSelected={handleDeleteSelected}
-        showOwner={isAdmin() && showAllDocs}
+        showOwner={isAdmin()}
       />
       
       <Snackbar
