@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  # Сервис с PostgreSQL базой данных
+  postgres:
+    image: postgres:15-alpine
+    container_name: rag-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Скрипты инициализации базы данных (если требуется дополнительная настройка)
+      - ./db-init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Сервис с Qdrant векторной базой данных
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag-qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Бэкенд сервис
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./indexes:/app/indexes
+    environment:
+      - DATABASE_URL=postgresql+psycopg2://postgres:mysecretpassword@postgres:5432/postgres
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - LOG_TO_FILE=true
+      - LOG_FILE=logs/app.log
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Фронтенд сервис
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rag-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  qdrant_data: 

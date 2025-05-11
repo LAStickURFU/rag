@@ -26,72 +26,65 @@
 
 - Python 3.9+
 - Ollama (локальная языковая модель)
-- PostgreSQL
-- Node.js 14+ (для фронтенда)
-- Docker и Docker Compose (опционально)
+- Docker и Docker Compose
 
 ## Установка и запуск
 
-### Вариант 1: Запуск с помощью Docker Compose
+### Вариант 1: Быстрый запуск через скрипт (рекомендуется)
 
-1. Клонировать репозиторий
-2. Создать файл `.env` на основе `.env.example`:
+1. Убедитесь, что на вашей системе установлен и запущен Ollama:
+   ```bash
+   # На macOS
+   open -a Ollama
+   
+   # На Linux
+   ollama serve
+   ```
+
+2. Запустите скрипт настройки и запуска:
+   ```bash
+   ./setup.sh
+   ```
+   
+   Скрипт автоматически выполнит:
+   - Проверку наличия и запуска Ollama
+   - Загрузку необходимой модели (если она отсутствует)
+   - Создание .env файла (если он не существует)
+   - Запуск всей системы через Docker Compose
+   
+3. Откройте веб-интерфейс в браузере:
+   ```
+   http://localhost:3000
+   ```
+
+### Вариант 2: Ручной запуск через Docker Compose
+
+1. Создайте файл `.env` на основе `.env.example`:
    ```bash
    cp .env.example .env
    ```
-3. Отредактировать `.env` под свои нужды
-4. Запустить с помощью Docker Compose:
+
+2. Убедитесь, что Ollama запущен и доступен по адресу http://localhost:11434
+
+3. Загрузите модель в Ollama (если необходимо):
+   ```bash
+   curl -X POST http://localhost:11434/api/pull -d '{"name": "mistral:7b-instruct"}'
+   ```
+
+4. Запустите систему с помощью Docker Compose:
    ```bash
    docker-compose up -d
    ```
 
-### Вариант 2: Локальный запуск
+### Архитектура системы
 
-#### Бэкенд
+Система состоит из нескольких контейнеров:
+- `postgres` - база данных для хранения метаданных
+- `qdrant` - векторная база данных
+- `backend` - FastAPI приложение
+- `frontend` - React приложение с NGINX
 
-1. Создать и активировать виртуальное окружение:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # для Linux/macOS
-   venv\Scripts\activate     # для Windows
-   ```
-
-2. Установить зависимости:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Установить и запустить Ollama с нужной моделью:
-   ```bash
-   # Установить Ollama с официального сайта https://ollama.com/download
-   # Запустить сервер Ollama
-   ollama serve
-   ```
-
-4. Запустить Qdrant в Docker:
-   ```bash
-   docker run -d --name qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
-   ```
-
-5. Запустить бэкенд:
-   ```bash
-   python -m app.main
-   ```
-
-#### Фронтенд
-
-1. Перейти в директорию frontend:
-   ```bash
-   cd frontend
-   ```
-2. Установить зависимости:
-   ```bash
-   npm install
-   ```
-3. Запустить фронтенд:
-   ```bash
-   npm start
-   ```
+При первом запуске система автоматически инициализирует все необходимые таблицы и схемы базы данных, без необходимости в ручных миграциях.
 
 ## Конфигурация
 
@@ -136,11 +129,11 @@ rag/
 │   └── src/              # Исходный код фронтенда
 ├── indexes/              # Директория для хранения индексов
 ├── logs/                 # Логи приложения
-├── scripts/              # Вспомогательные скрипты
-├── tests/                # Тесты
-├── .env.example          # Пример конфигурации окружения
-├── Dockerfile            # Конфигурация Docker образа
+├── db-init/              # Скрипты инициализации PostgreSQL
 ├── docker-compose.yml    # Конфигурация Docker Compose
+├── Dockerfile            # Конфигурация Docker образа
+├── setup.sh              # Скрипт для быстрого запуска
+├── .env.example          # Пример конфигурации окружения
 └── requirements.txt      # Python зависимости
 ```
 
