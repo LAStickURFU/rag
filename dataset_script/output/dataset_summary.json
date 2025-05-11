@@ -1,0 +1,85 @@
+{
+  "total_docs": 2712,
+  "avg_words": 561.1825221238938,
+  "max_words": 4663,
+  "min_words": 4,
+  "avg_chars": 4061.9885693215338,
+  "num_duplicates": 14,
+  "languages": {
+    "ru": 2712
+  },
+  "total_vocab_size": 71787,
+  "top_words": {
+    "в": 53983,
+    "и": 48597,
+    "на": 30360,
+    "с": 18556,
+    "не": 17846,
+    "по": 16235,
+    "для": 13647,
+    "если": 12872,
+    "или": 12564,
+    "что": 9914,
+    "за": 9572,
+    "как": 9515,
+    "от": 9477,
+    "а": 8034,
+    "о": 7980,
+    "это": 7349,
+    "рублей": 6717,
+    "можно": 6199,
+    "до": 6014,
+    "нужно": 5935
+  },
+  "avg_ttr": 0.7041409665330924,
+  "min_ttr": 0.25038839979285343,
+  "max_ttr": 1.0,
+  "avg_noise_ratio": 0.0452780422284957,
+  "min_noise_ratio": 0.0,
+  "max_noise_ratio": 0.1717557251908397,
+  "avg_paragraph_word_ratio": 0.0,
+  "min_paragraph_word_ratio": 0.0,
+  "max_paragraph_word_ratio": 0.0,
+  "rag_metrics": {
+    "avg_chunks_per_doc": 1.7699115044247788,
+    "max_chunks": 10,
+    "min_chunks": 1,
+    "num_docs_over_1_chunk": 829,
+    "num_docs_under_100_words": 733,
+    "duplicate_ratio": 0.005162241887905605,
+    "avg_paragraphs_per_doc": 0.0,
+    "chunk_length_distribution": {
+      "<100": 733,
+      "100-299": 1063,
+      "300-499": 86,
+      "500-699": 66,
+      "700-999": 164,
+      "1000-1499": 234,
+      "1500-1999": 174,
+      ">2000": 192
+    },
+    "chunk_stats_by_size": {
+      "256": {
+        "avg_chunks_per_doc": 2.737463126843658,
+        "max_chunks": 19,
+        "min_chunks": 1,
+        "num_docs_with_1_chunk": 1744,
+        "num_docs_with_2_or_more": 968
+      },
+      "512": {
+        "avg_chunks_per_doc": 1.7699115044247788,
+        "max_chunks": 10,
+        "min_chunks": 1,
+        "num_docs_with_1_chunk": 1883,
+        "num_docs_with_2_or_more": 829
+      },
+      "1024": {
+        "avg_chunks_per_doc": 1.297197640117994,
+        "max_chunks": 5,
+        "min_chunks": 1,
+        "num_docs_with_1_chunk": 2125,
+        "num_docs_with_2_or_more": 587
+      }
+    }
+  }
+}
