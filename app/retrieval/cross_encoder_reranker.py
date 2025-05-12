@@ -191,8 +191,8 @@ class CrossEncoderReranker:
                 if range_ce > 0:
                     # Применяем сигмоидную трансформацию для усиления контраста
                     normalized_score = (score - min_ce_score) / range_ce
-                    # Используем кубическую функцию для усиления контраста
-                    enhanced_score = normalized_score ** 3 if normalized_score > 0.6 else normalized_score ** 2
+                    # Используем более сильную нелинейность для усиления контраста
+                    enhanced_score = normalized_score ** 4 if normalized_score > 0.8 else (normalized_score ** 3 if normalized_score > 0.6 else normalized_score ** 2)
                     # Отсекаем очень низкие скоры
                     ce_scores[idx] = max(0.0, enhanced_score - 0.1)
                 else:

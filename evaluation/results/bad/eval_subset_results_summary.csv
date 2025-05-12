@@ -1,0 +1,11 @@
+,0,1,2,mean
+bertscore,0.5299,0.5406,0.5249,0.5318
+context_recall_manual,0.0,0.0,0.0,0.0
+context_precision_manual,0.0,0.0,0.0,0.0
+faithfulness_semantic,0.0,0.0,0.0,0.0
+ragas_answer_relevance,0.9788,0.8924,1.0,0.9571
+ragas_faithfulness,0.0,1.0,0.0,0.3333
+exact_match,0.0,0.0,0.0,0.0
+answer_correctness,0.0255,0.0387,0.022,0.0287
+llm_relevance,0.8,0.9,1.0,0.9
+llm_faithfulness,0.9,0.9,0.9,0.9

@@ -113,7 +113,7 @@ class HybridRetriever:
                      
         return normalized
     
-    def _adaptive_k(self, scores: List[Tuple[int, float]], min_k: int = 3, max_k: int = 10) -> int:
+    def _adaptive_k(self, scores: List[Tuple[int, float]], min_k: int = 5, max_k: int = 10) -> int:
         """
         Адаптивно выбирает количество документов на основе распределения scores.
         
@@ -146,15 +146,15 @@ class HybridRetriever:
             return min(min_k, len(sorted_scores))
         
         # Находим значительные падения после min_k
-        significant_drops = [(i, drop) for i, drop in relative_drops if drop > 0.12 and i >= min_k]
+        significant_drops = [(i, drop) for i, drop in relative_drops if drop > 0.1 and i >= min_k]
         
         if significant_drops:
             # Берем первое значительное падение
             return significant_drops[0][0]
         else:
             # Если нет значительных падений, смотрим, какой минимальный score приемлем
-            # Берем все документы со score не менее 60% от максимального (увеличено для лучшего качества ответов)
-            threshold = sorted_scores[0] * 0.6
+            # Берем все документы со score не менее 70% от максимального (увеличено для лучшего качества ответов)
+            threshold = sorted_scores[0] * 0.7
             for i, score in enumerate(sorted_scores):
                 if score < threshold:
                     return max(min_k, i)
@@ -178,7 +178,7 @@ class HybridRetriever:
         return 1.0 / (k + rank)
     
     def search(self, query: str, dense_results: List[Tuple[Any, float]], 
-              top_k: int = 5) -> List[Tuple[Any, float]]:
+              top_k: int = 10) -> List[Tuple[Any, float]]:
         """
         Выполняет гибридный поиск, объединяя dense и sparse результаты.
         
@@ -233,7 +233,7 @@ class HybridRetriever:
         hybrid_scores.sort(key=lambda x: x[1], reverse=True)
         
         # Добавляем Dynamic Rerank Threshold
-        MIN_RERANK_THRESHOLD = 0.3  # Понижен с 0.4 для более широкого охвата кандидатов
+        MIN_RERANK_THRESHOLD = 0.25  # Понижен с 0.3 для более широкого охвата кандидатов
         
         # Отбираем все фрагменты выше порога для переранжирования
         threshold_scores = [(idx, score) for idx, score in hybrid_scores 
@@ -295,7 +295,7 @@ class HybridRetriever:
         # Определяем адаптивное количество документов, если нужно
         if self.use_adaptive_k:
             adaptive_k = self._adaptive_k([(i, score) for i, (_, score) in enumerate(final_results)], 
-                                        min_k=3, max_k=top_k)
+                                        min_k=7, max_k=top_k)
             logger.info(f"Adaptive K selected: {adaptive_k} (from max top_k: {top_k})")
             top_k = adaptive_k
         
