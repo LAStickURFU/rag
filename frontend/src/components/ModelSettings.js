@@ -13,11 +13,16 @@ import {
   Grid,
   Accordion,
   AccordionSummary,
-  AccordionDetails
+  AccordionDetails,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  CircularProgress
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import InfoIcon from '@mui/icons-material/Info';
-import { getModelSettings, updateModelSettings } from '../services/api';
+import { getModelSettings, updateModelSettings, getAvailableModels, switchModel } from '../services/api';
 
 const ModelSettings = () => {
   const [settings, setSettings] = useState({
@@ -28,10 +33,17 @@ const ModelSettings = () => {
     context_window: 8192
   });
 
+  // Состояния для выбора модели (из ModelSelector)
+  const [models, setModels] = useState([]);
+  const [activeModel, setActiveModel] = useState('');
+  const [selectedModel, setSelectedModel] = useState('');
+  const [switching, setSwitching] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
   const [changed, setChanged] = useState(false);
+  const [modelSuccess, setModelSuccess] = useState('');
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -46,30 +58,73 @@ const ModelSettings = () => {
     };
 
     fetchSettings();
+
+    // Загрузка списка доступных моделей
+    const fetchModels = async () => {
+      try {
+        const data = await getAvailableModels();
+        setModels(data.models);
+        setActiveModel(data.active_model);
+        setSelectedModel(data.active_model);
+      } catch (err) {
+        console.error('Ошибка при получении списка моделей:', err);
+        setError('Не удалось загрузить список доступных моделей');
+      }
+    };
+
+    fetchModels();
   }, []);
 
   const handleChange = (name) => (event, newValue) => {
     // Для слайдеров используем второй параметр
     const value = newValue !== undefined ? newValue : event.target.value;
-   
+
     setSettings({
       ...settings,
       [name]: value
     });
-   
+
     setChanged(true);
   };
 
   const handleNumberChange = (name) => (event) => {
     const value = parseFloat(event.target.value);
-   
+
     if (!isNaN(value)) {
       setSettings({
         ...settings,
         [name]: value
       });
-     
+
       setChanged(true);
+    }
+  };
+
+  // Обработчик изменения выбранной модели
+  const handleModelChange = (event) => {
+    setSelectedModel(event.target.value);
+  };
+
+  // Обработчик кнопки смены модели
+  const handleSwitchModel = async () => {
+    if (selectedModel === activeModel) {
+      return; // Модель уже активна
+    }
+
+    try {
+      setError('');
+      setModelSuccess('');
+      setSwitching(true);
+
+      await switchModel(selectedModel);
+
+      setActiveModel(selectedModel);
+      setModelSuccess(`Модель успешно изменена на ${selectedModel}`);
+    } catch (err) {
+      console.error('Ошибка при переключении модели:', err);
+      setError('Не удалось переключить модель');
+    } finally {
+      setSwitching(false);
     }
   };
 
@@ -77,7 +132,7 @@ const ModelSettings = () => {
     e.preventDefault();
     setSuccess(false);
     setError('');
-   
+
     try {
       setLoading(true);
       await updateModelSettings(settings);
@@ -103,9 +158,79 @@ const ModelSettings = () => {
         <AccordionDetails>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           {success && <Alert severity="success" sx={{ mb: 2 }}>Настройки успешно сохранены!</Alert>}
-         
+          {modelSuccess && <Alert severity="success" sx={{ mb: 2 }}>{modelSuccess}</Alert>}
+
           <Box component="form" onSubmit={handleSubmit}>
             <Grid container spacing={3}>
+              {/* Выбор языковой модели */}
+              <Grid item xs={12}>
+                <Typography variant="h6" sx={{ mb: 2 }}>Языковая модель</Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                  <Typography variant="body1">
+                    Текущая модель: <strong>{activeModel}</strong>
+                  </Typography>
+                  <Tooltip title="Выберите языковую модель для генерации ответов. Учтите, что переключение требует загрузки новой модели и может занять некоторое время.">
+                    <IconButton size="small" sx={{ ml: 1 }}>
+                      <InfoIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={8}>
+                    <FormControl fullWidth>
+                      <InputLabel id="model-select-label">Выбрать модель</InputLabel>
+                      <Select
+                        labelId="model-select-label"
+                        id="model-select"
+                        value={selectedModel}
+                        label="Выбрать модель"
+                        onChange={handleModelChange}
+                        disabled={switching}
+                      >
+                        {models.map((model) => (
+                          <MenuItem key={model.name} value={model.name}>
+                            <Box>
+                              <Typography variant="body1">{model.name}</Typography>
+                              {model.description && (
+                                <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+                                  {model.description}
+                                </Typography>
+                              )}
+                            </Box>
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Grid>
+
+                  <Grid item xs={12} md={4}>
+                    <Button
+                      variant="contained"
+                      color="primary"
+                      onClick={handleSwitchModel}
+                      disabled={switching || selectedModel === activeModel}
+                      fullWidth
+                      sx={{ height: '56px' }} // Выравниваем по высоте с Select
+                    >
+                      {switching ? (
+                        <>
+                          <CircularProgress size={24} sx={{ mr: 1 }} />
+                          Переключение...
+                        </>
+                      ) : (
+                        'Переключить модель'
+                      )}
+                    </Button>
+                  </Grid>
+                </Grid>
+                <Alert severity="info" sx={{ mt: 2, mb: 3 }}>
+                  При переключении модели, новая модель будет загружена в память.
+                  Это может занять некоторое время, особенно при первом запуске.
+                </Alert>
+                <Divider sx={{ my: 2 }} />
+              </Grid>
+
               <Grid item xs={12} md={6}>
                 <Box sx={{ mt: 2, mb: 3 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center' }}>

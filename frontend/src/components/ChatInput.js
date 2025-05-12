@@ -53,6 +53,7 @@ const ChatInput = ({ onSendMessage, loading, disabled }) => {
           alignItems: 'center',
           borderRadius: 2,
           boxShadow: 2,
+          mb: 0
         }}
         onSubmit={(e) => {
           e.preventDefault();
@@ -66,8 +67,8 @@ const ChatInput = ({ onSendMessage, loading, disabled }) => {
           onChange={(e) => setMessage(e.target.value)}
           onKeyPress={handleKeyPress}
           multiline
-          minRows={3}
-          maxRows={8}
+          minRows={4}
+          maxRows={10}
           disabled={loading || disabled}
         />
         {loading ? (
