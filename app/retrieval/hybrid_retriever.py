@@ -25,8 +25,8 @@ class HybridRetriever:
     """
     
     def __init__(self, 
-                dense_weight: float = 0.7,  # Увеличен вес векторного поиска для лучшей семантической релевантности
-                reranker_weight: float = 0.7,  # Усилено влияние reranker для более точного ранжирования
+                dense_weight: float = 0.6,  # Оптимизировано для e5-base
+                reranker_weight: float = 0.6,  # Усилено влияние reranker для более точного ранжирования
                 use_reranker: bool = True,
                 use_adaptive_k: bool = True,
                 cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",

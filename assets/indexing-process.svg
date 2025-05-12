@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="800" height="500" xmlns="http://www.w3.org/2000/svg">
+  <!-- Фон -->
+  <rect width="800" height="500" fill="#f8f9fa" />
+  
+  <!-- Заголовок -->
+  <text x="400" y="40" font-family="Arial" font-size="24" font-weight="bold" text-anchor="middle" fill="#333">Процесс индексации документов</text>
+  
+  <!-- Основная линия процесса -->
+  <line x1="100" y1="170" x2="700" y2="170" stroke="#adb5bd" stroke-width="3" stroke-linecap="round" />
+  
+  <!-- Этапы процесса -->
+  <!-- 1. Загрузка документа -->
+  <circle cx="100" cy="170" r="30" fill="#4dabf7" stroke="#1864ab" stroke-width="2" />
+  <text x="100" y="175" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#fff">1</text>
+  <text x="100" y="220" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#1864ab">Загрузка</text>
+  <text x="100" y="240" font-family="Arial" font-size="12" text-anchor="middle" fill="#495057">PDF, DOCX, TXT, и др.</text>
+  
+  <!-- 2. Извлечение текста -->
+  <circle cx="220" cy="170" r="30" fill="#4dabf7" stroke="#1864ab" stroke-width="2" />
+  <text x="220" y="175" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#fff">2</text>
+  <text x="220" y="220" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#1864ab">Извлечение</text>
+  <text x="220" y="240" font-family="Arial" font-size="12" text-anchor="middle" fill="#495057">Конвертация в текст</text>
+  
+  <!-- 3. Разбиение на фрагменты -->
+  <circle cx="340" cy="170" r="30" fill="#4dabf7" stroke="#1864ab" stroke-width="2" />
+  <text x="340" y="175" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#fff">3</text>
+  <text x="340" y="220" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#1864ab">Чанкинг</text>
+  <text x="340" y="240" font-family="Arial" font-size="12" text-anchor="middle" fill="#495057">Разбиение на чанки</text>
+  
+  <!-- 4. Векторизация -->
+  <circle cx="460" cy="170" r="30" fill="#4dabf7" stroke="#1864ab" stroke-width="2" />
+  <text x="460" y="175" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#fff">4</text>
+  <text x="460" y="220" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#1864ab">Векторизация</text>
+  <text x="460" y="240" font-family="Arial" font-size="12" text-anchor="middle" fill="#495057">Создание эмбеддингов</text>
+  
+  <!-- 5. Сохранение в индекс -->
+  <circle cx="580" cy="170" r="30" fill="#4dabf7" stroke="#1864ab" stroke-width="2" />
+  <text x="580" y="175" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#fff">5</text>
+  <text x="580" y="220" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#1864ab">Индексация</text>
+  <text x="580" y="240" font-family="Arial" font-size="12" text-anchor="middle" fill="#495057">Сохранение в Qdrant</text>
+  
+  <!-- 6. Обновление метаданных -->
+  <circle cx="700" cy="170" r="30" fill="#4dabf7" stroke="#1864ab" stroke-width="2" />
+  <text x="700" y="175" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#fff">6</text>
+  <text x="700" y="220" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#1864ab">Метаданные</text>
+  <text x="700" y="240" font-family="Arial" font-size="12" text-anchor="middle" fill="#495057">Обновление в PostgreSQL</text>
+  
+  <!-- Параллельные процессы и дополнительная информация -->
+  <!-- Стратегии разбиения на чанки -->
+  <rect x="290" y="290" width="100" height="30" rx="15" ry="15" fill="#82c91e" stroke="#2b8a3e" stroke-width="1" />
+  <text x="340" y="310" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">character</text>
+  
+  <rect x="290" y="330" width="100" height="30" rx="15" ry="15" fill="#82c91e" stroke="#2b8a3e" stroke-width="1" />
+  <text x="340" y="350" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">token</text>
+  
+  <rect x="290" y="370" width="100" height="30" rx="15" ry="15" fill="#82c91e" stroke="#2b8a3e" stroke-width="1" />
+  <text x="340" y="390" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">semantic</text>
+  
+  <rect x="290" y="410" width="100" height="30" rx="15" ry="15" fill="#82c91e" stroke="#2b8a3e" stroke-width="1" />
+  <text x="340" y="430" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">hierarchical</text>
+  
+  <line x1="340" y1="200" x2="340" y2="280" stroke="#2b8a3e" stroke-width="2" stroke-dasharray="5,5" />
+  <text x="340" y="270" font-family="Arial" font-size="12" font-weight="bold" text-anchor="middle" fill="#2b8a3e">Режимы чанкинга</text>
+  
+  <!-- Модели эмбеддингов -->
+  <rect x="440" y="290" width="200" height="30" rx="15" ry="15" fill="#f06595" stroke="#a61e4d" stroke-width="1" />
+  <text x="540" y="310" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">intfloat/multilingual-e5-large</text>
+  
+  <line x1="460" y1="200" x2="460" y2="280" stroke="#a61e4d" stroke-width="2" stroke-dasharray="5,5" />
+  <text x="460" y="270" font-family="Arial" font-size="12" font-weight="bold" text-anchor="middle" fill="#a61e4d">Модель эмбеддингов</text>
+  
+  <!-- Асинхронная обработка -->
+  <rect x="110" y="100" width="580" height="40" rx="5" ry="5" fill="#e9ecef" stroke="#ced4da" stroke-width="2" />
+  <text x="400" y="125" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#495057">Асинхронная обработка документов в фоновом режиме</text>
+  
+  <!-- Стрелки статусов -->
+  <path d="M100 170 Q 120 90 160 90 L 650 90 Q 680 90 700 170" stroke="#6741d9" stroke-width="2" stroke-dasharray="3,3" fill="none" />
+  
+  <!-- Статусы обработки -->
+  <text x="160" y="80" font-family="Arial" font-size="12" text-anchor="middle" fill="#6741d9">uploaded</text>
+  <text x="250" y="80" font-family="Arial" font-size="12" text-anchor="middle" fill="#6741d9">processing</text>
+  <text x="340" y="80" font-family="Arial" font-size="12" text-anchor="middle" fill="#6741d9">chunking</text>
+  <text x="460" y="80" font-family="Arial" font-size="12" text-anchor="middle" fill="#6741d9">embedding</text>
+  <text x="580" y="80" font-family="Arial" font-size="12" text-anchor="middle" fill="#6741d9">indexing</text>
+  <text x="650" y="80" font-family="Arial" font-size="12" text-anchor="middle" fill="#6741d9">indexed</text>
+</svg> 

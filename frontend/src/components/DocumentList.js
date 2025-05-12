@@ -20,7 +20,8 @@ import {
   Divider,
   Tooltip,
   LinearProgress,
-  Alert
+  Alert,
+  Pagination
 } from '@mui/material';
 import DescriptionIcon from '@mui/icons-material/Description';
 import WebIcon from '@mui/icons-material/Web';
@@ -128,7 +129,9 @@ function DocumentList({
   onSelect, 
   onSelectAll, 
   onDeleteSelected,
-  showOwner = false 
+  showOwner = false,
+  pagination = null,
+  onPageChange = null
 }) {
   const theme = useTheme();
   const [detailOpen, setDetailOpen] = useState(false);
@@ -208,16 +211,16 @@ function DocumentList({
   const selectedCount = selectedIds.length;
 
   // Вычисляем, есть ли документы в процессе обработки
-  const hasProcessingDocuments = documents.some(doc => 
+  const hasProcessingDocuments = Array.isArray(documents) && documents.some(doc => 
     ['processing', 'chunking', 'embedding', 'indexing', 'uploaded', 'reindexing'].includes(doc.status)
   );
 
   // Проверяем, идет ли переиндексация
-  const isReindexing = documents.some(doc => doc.status === 'reindexing');
+  const isReindexing = Array.isArray(documents) && documents.some(doc => doc.status === 'reindexing');
 
   // Вычисляем общий прогресс обработки всех документов
   const calculateTotalProgress = () => {
-    if (!hasProcessingDocuments) return 100;
+    if (!hasProcessingDocuments || !Array.isArray(documents)) return 100;
 
     const totalDocs = documents.length;
     let progressSum = 0;
@@ -297,7 +300,7 @@ function DocumentList({
           />
         </Box>
       ) : (
-        documents.some(doc => doc.status === 'error') ? (
+        Array.isArray(documents) && documents.some(doc => doc.status === 'error') ? (
           <Box sx={{ px: 2, py: 1, mb: 1 }}>
             <Alert severity="warning">
               Некоторые документы не удалось обработать. Проверьте детали, нажав на документ.
@@ -325,7 +328,7 @@ function DocumentList({
       )}
       
       <List sx={{ width: '100%' }}>
-        {documents.map((doc, index) => (
+        {Array.isArray(documents) && documents.map((doc, index) => (
           <React.Fragment key={doc.id}>
             {index > 0 && <li><hr /></li>}
             <ListItem alignItems="flex-start" sx={{ py: 2 }}
@@ -393,6 +396,18 @@ function DocumentList({
                         Фрагментов: {doc.chunks_count}
                       </Box>
                     )}
+                    
+                    {/* Добавляем основную информацию о чанкинге и для списка */}
+                    {doc.chunking_mode && (
+                      <Box
+                        component="span"
+                        sx={{ display: 'block', color: 'text.secondary', fontSize: '0.875rem' }}
+                      >
+                        Режим чанкинга: {doc.chunking_mode}
+                        {doc.processing_summary?.chunk_size && ` | Размер: ${doc.processing_summary.chunk_size}`}
+                        {doc.processing_summary?.chunk_overlap && ` | Перекрытие: ${doc.processing_summary.chunk_overlap}`}
+                      </Box>
+                    )}
                   </React.Fragment>
                 }
                 secondaryTypographyProps={{ component: 'div' }}
@@ -409,6 +424,20 @@ function DocumentList({
           </React.Fragment>
         ))}
       </List>
+      
+      {/* Добавляем компонент пагинации, если она доступна */}
+      {pagination && pagination.total_pages > 1 && (
+        <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+          <Pagination 
+            count={pagination.total_pages} 
+            page={pagination.page + 1} // API использует 0-based индексы, Pagination использует 1-based
+            onChange={(e, page) => onPageChange && onPageChange(page - 1)} // Конвертируем обратно в 0-based
+            color="primary"
+            showFirstButton
+            showLastButton
+          />
+        </Box>
+      )}
       
       {/* Диалог подробной информации */}
       <Dialog open={detailOpen} onClose={handleCloseDetail} maxWidth="sm" fullWidth>
@@ -438,7 +467,43 @@ function DocumentList({
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>ID:</b> {detail.id}</Box>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Кол-во чанков:</b> {detail.chunks_count}</Box>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Длина текста:</b> {detail.content_length} символов</Box>
+              
+              {/* Расширенная информация о параметрах индексации */}
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>Параметры индексации:</Typography>
               <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Режим чанкинга:</b> {detail.chunking_mode || 'character'}</Box>
+              <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Размер чанка:</b> {detail.chunking_info?.chunk_size || '-'} токенов</Box>
+              <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Перекрытие чанков:</b> {detail.chunking_info?.chunk_overlap || '-'} токенов</Box>
+              <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Модель эмбеддингов:</b> {detail.chunking_info?.embedding_model || '-'}</Box>
+              
+              {/* Дополнительные параметры обработки */}
+              {detail.processing_info && Object.keys(detail.processing_info).length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>Дополнительные параметры:</Typography>
+                  {detail.processing_info.use_hybrid_search !== undefined && (
+                    <Box component="span" sx={{ display: 'block', mb: 1 }}>
+                      <b>Гибридный поиск:</b> {detail.processing_info.use_hybrid_search ? 'Да' : 'Нет'}
+                    </Box>
+                  )}
+                  {detail.processing_info.dense_weight !== undefined && (
+                    <Box component="span" sx={{ display: 'block', mb: 1 }}>
+                      <b>Вес векторного поиска:</b> {detail.processing_info.dense_weight}
+                    </Box>
+                  )}
+                  {detail.processing_info.sparse_weight !== undefined && (
+                    <Box component="span" sx={{ display: 'block', mb: 1 }}>
+                      <b>Вес лексического поиска:</b> {detail.processing_info.sparse_weight}
+                    </Box>
+                  )}
+                  {detail.processing_info.reranker_weight !== undefined && (
+                    <Box component="span" sx={{ display: 'block', mb: 1 }}>
+                      <b>Вес ранжирования:</b> {detail.processing_info.reranker_weight}
+                    </Box>
+                  )}
+                </>
+              )}
+              
               {showOwner && detail.uploader && (
                 <Box component="span" sx={{ display: 'block', mb: 1 }}><b>Владелец:</b> {detail.uploader} (ID: {detail.user_id})</Box>
               )}

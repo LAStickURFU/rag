@@ -6,13 +6,13 @@ import logging
 import time
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User as UserModel, Chat as ChatModel, ModelConfig as ModelConfigModel
+from app.models import User as UserModel, Chat as ChatModel, ModelConfig as ModelConfigModel, Document as DocumentModel
 from app.schemas import QuestionRequest, ChatResponse
 from app.ollama_client import get_ollama_instance
 from app.routers.auth import get_current_user, get_current_admin
@@ -267,6 +267,167 @@ async def direct_ask(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ошибка обработки запроса: {str(e)}"
+        )
+
+@router.get("/stats")
+async def get_rag_stats(
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Получение статистики о состоянии RAG-системы, включая:
+    - Количество документов по статусам
+    - Общее количество чанков
+    - Информацию о векторной базе
+    - Метаданные обработки и настройки
+    """
+    try:
+        # Общее количество документов
+        total_docs = db.query(DocumentModel).count()
+        
+        # Статусы документов
+        status_counts = {}
+        statuses = ['indexed', 'error', 'processing', 'chunking', 'embedding', 'reindexing', 'uploaded']
+        for status_name in statuses:
+            count = db.query(DocumentModel).filter(DocumentModel.status == status_name).count()
+            status_counts[status_name] = count
+        
+        # Общее количество чанков
+        total_chunks = db.query(DocumentModel.chunks_count).filter(
+            DocumentModel.status == 'indexed'
+        ).all()
+        total_chunks_count = sum(count[0] for count in total_chunks if count[0] is not None)
+        
+        # Получаем сервис RAG и его настройки
+        rag_service = get_rag_service()
+        
+        # Информация о режиме чанкинга и настройках
+        chunking_info = {
+            "mode": rag_service.chunking_mode,
+            "chunk_size": rag_service.chunk_size,
+            "chunk_overlap": rag_service.chunk_overlap,
+            "min_chunk_size": rag_service.min_chunk_size,
+            "max_chunk_size": rag_service.max_chunk_size
+        }
+        
+        # Информация о поиске
+        search_info = {
+            "use_hybrid": rag_service.use_hybrid,
+            "dense_weight": rag_service.dense_weight,
+            "sparse_weight": getattr(rag_service, 'sparse_weight', 0.3),
+            "reranker_weight": rag_service.reranker_weight,
+            "model_name": rag_service.model_name,
+            "vector_size": rag_service.vectorizer.vector_size,
+        }
+        
+        # Информация о размере векторной базы
+        try:
+            # Получаем информацию о коллекции Qdrant
+            collection_info = rag_service.index.client.get_collection(
+                collection_name=rag_service.collection_name
+            )
+            vector_db_info = {
+                "points_count": collection_info.points_count,
+                "vectors_count": collection_info.vectors_count,
+                "segments_count": collection_info.segments_count,
+                "storage_size": getattr(collection_info, 'disk_data_size', 0),
+                "status": collection_info.status,
+                "collection_name": rag_service.collection_name
+            }
+        except Exception as e:
+            logger.error(f"Error getting Qdrant collection info: {str(e)}")
+            vector_db_info = {
+                "error": str(e)
+            }
+        
+        # Информация о пользователях и документах
+        users_count = db.query(UserModel).count()
+        
+        # Топ-5 пользователей по количеству документов
+        from sqlalchemy import func
+        top_users_docs = db.query(
+            DocumentModel.user_id,
+            UserModel.username,
+            func.count(DocumentModel.id).label('docs_count')
+        ).join(UserModel).group_by(
+            DocumentModel.user_id, 
+            UserModel.username
+        ).order_by(
+            func.count(DocumentModel.id).desc()
+        ).limit(5).all()
+        
+        top_users_docs_data = [{
+            "user_id": user_id,
+            "username": username,
+            "docs_count": docs_count
+        } for user_id, username, docs_count in top_users_docs]
+        
+        # Размеры документов
+        doc_sizes = db.query(
+            func.min(DocumentModel.file_size).label('min_size'),
+            func.max(DocumentModel.file_size).label('max_size'),
+            func.avg(DocumentModel.file_size).label('avg_size')
+        ).filter(DocumentModel.file_size > 0).first()
+        
+        # Соберём статистику по количеству чанков на документ
+        chunks_per_doc = db.query(
+            func.min(DocumentModel.chunks_count).label('min_chunks'),
+            func.max(DocumentModel.chunks_count).label('max_chunks'),
+            func.avg(DocumentModel.chunks_count).label('avg_chunks')
+        ).filter(DocumentModel.chunks_count > 0).first()
+        
+        # Соберём данные по режимам чанкинга
+        chunking_modes_stats = db.query(
+            DocumentModel.chunking_mode,
+            func.count(DocumentModel.id).label('count')
+        ).filter(DocumentModel.chunking_mode.isnot(None)).group_by(
+            DocumentModel.chunking_mode
+        ).all()
+        
+        chunking_modes_data = [{
+            "mode": mode or "unknown",
+            "count": count
+        } for mode, count in chunking_modes_stats]
+        
+        # Собираем полную статистику
+        stats = {
+            "documents": {
+                "total": total_docs,
+                "status_counts": status_counts
+            },
+            "chunks": {
+                "total_count": total_chunks_count,
+                "per_document": {
+                    "min": chunks_per_doc.min_chunks if chunks_per_doc else None,
+                    "max": chunks_per_doc.max_chunks if chunks_per_doc else None,
+                    "avg": float(chunks_per_doc.avg_chunks) if chunks_per_doc and chunks_per_doc.avg_chunks is not None else None,
+                }
+            },
+            "vector_db": vector_db_info,
+            "chunking": {
+                "current_config": chunking_info,
+                "modes_usage": chunking_modes_data
+            },
+            "search": search_info,
+            "users": {
+                "total": users_count,
+                "top_by_docs": top_users_docs_data
+            },
+            "document_sizes": {
+                "min": doc_sizes.min_size if doc_sizes else None,
+                "max": doc_sizes.max_size if doc_sizes else None,
+                "avg": float(doc_sizes.avg_size) if doc_sizes and doc_sizes.avg_size is not None else None,
+            }
+        }
+        
+        return stats
+        
+    except Exception as e:
+        logger.error(f"Error getting RAG stats: {str(e)}")
+        from fastapi import status as fastapi_status
+        raise HTTPException(
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при получении статистики: {str(e)}"
         )
 
 @router.post("/index/clear")

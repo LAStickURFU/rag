@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+  <!-- Фон -->
+  <rect width="800" height="600" fill="#f8f9fa" />
+  
+  <!-- Заголовок -->
+  <text x="400" y="40" font-family="Arial" font-size="24" font-weight="bold" text-anchor="middle" fill="#333">Архитектура RAG-системы</text>
+  
+  <!-- Контейнеры Docker -->
+  <rect x="60" y="80" width="680" height="480" rx="10" ry="10" fill="#e9ecef" stroke="#495057" stroke-width="2" stroke-dasharray="5,5" />
+  <text x="400" y="100" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle" fill="#495057">Docker Compose</text>
+  
+  <!-- Бэкенд (FastAPI) -->
+  <rect x="100" y="130" width="200" height="220" rx="5" ry="5" fill="#4dabf7" stroke="#1864ab" stroke-width="2" />
+  <text x="200" y="155" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle" fill="#fff">Backend (FastAPI)</text>
+  
+  <!-- Компоненты бэкенда -->
+  <rect x="120" y="175" width="160" height="30" rx="3" ry="3" fill="#1864ab" stroke="#1864ab" stroke-width="1" />
+  <text x="200" y="195" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">API Endpoints</text>
+  
+  <rect x="120" y="215" width="160" height="30" rx="3" ry="3" fill="#1864ab" stroke="#1864ab" stroke-width="1" />
+  <text x="200" y="235" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">RAG Service</text>
+  
+  <rect x="120" y="255" width="75" height="30" rx="3" ry="3" fill="#1864ab" stroke="#1864ab" stroke-width="1" />
+  <text x="157" y="275" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">Vectorizer</text>
+  
+  <rect x="205" y="255" width="75" height="30" rx="3" ry="3" fill="#1864ab" stroke="#1864ab" stroke-width="1" />
+  <text x="242" y="275" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">Chunker</text>
+  
+  <rect x="120" y="295" width="75" height="30" rx="3" ry="3" fill="#1864ab" stroke="#1864ab" stroke-width="1" />
+  <text x="157" y="315" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">HybridSearch</text>
+  
+  <rect x="205" y="295" width="75" height="30" rx="3" ry="3" fill="#1864ab" stroke="#1864ab" stroke-width="1" />
+  <text x="242" y="315" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">QdrantIndex</text>
+  
+  <!-- Векторная БД (Qdrant) -->
+  <rect x="500" y="130" width="200" height="120" rx="5" ry="5" fill="#82c91e" stroke="#2b8a3e" stroke-width="2" />
+  <text x="600" y="155" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle" fill="#fff">Qdrant</text>
+  <text x="600" y="175" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">Векторное хранилище</text>
+  
+  <rect x="520" y="195" width="160" height="30" rx="3" ry="3" fill="#2b8a3e" stroke="#2b8a3e" stroke-width="1" />
+  <text x="600" y="215" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">Векторные эмбеддинги</text>
+  
+  <!-- PostgreSQL -->
+  <rect x="500" y="280" width="200" height="120" rx="5" ry="5" fill="#339af0" stroke="#1864ab" stroke-width="2" />
+  <text x="600" y="305" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle" fill="#fff">PostgreSQL</text>
+  <text x="600" y="325" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">Реляционная БД</text>
+  
+  <rect x="520" y="345" width="160" height="30" rx="3" ry="3" fill="#1864ab" stroke="#1864ab" stroke-width="1" />
+  <text x="600" y="365" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">Метаданные и пользователи</text>
+  
+  <!-- Фронтенд (React) -->
+  <rect x="100" y="380" width="200" height="150" rx="5" ry="5" fill="#f06595" stroke="#a61e4d" stroke-width="2" />
+  <text x="200" y="405" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle" fill="#fff">Frontend (React)</text>
+  
+  <rect x="120" y="425" width="160" height="30" rx="3" ry="3" fill="#a61e4d" stroke="#a61e4d" stroke-width="1" />
+  <text x="200" y="445" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">Chat Interface</text>
+  
+  <rect x="120" y="465" width="160" height="30" rx="3" ry="3" fill="#a61e4d" stroke="#a61e4d" stroke-width="1" />
+  <text x="200" y="485" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">Document Management</text>
+  
+  <!-- Ollama -->
+  <rect x="500" y="430" width="200" height="100" rx="5" ry="5" fill="#9775fa" stroke="#5f3dc4" stroke-width="2" />
+  <text x="600" y="455" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle" fill="#fff">Ollama</text>
+  <text x="600" y="475" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">Локальные LLM-модели</text>
+  
+  <rect x="520" y="495" width="160" height="30" rx="3" ry="3" fill="#5f3dc4" stroke="#5f3dc4" stroke-width="1" />
+  <text x="600" y="515" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">mistral:7b-instruct</text>
+  
+  <!-- Стрелки связей -->
+  <!-- Бэкенд -> Qdrant -->
+  <path d="M300 190 L500 190" stroke="#495057" stroke-width="2" marker-end="url(#arrowhead)" fill="none" />
+  
+  <!-- Бэкенд -> PostgreSQL -->
+  <path d="M300 320 L500 320" stroke="#495057" stroke-width="2" marker-end="url(#arrowhead)" fill="none" />
+  
+  <!-- Бэкенд -> Ollama -->
+  <path d="M200 350 L200 380 L400 380 L400 480 L500 480" stroke="#495057" stroke-width="2" marker-end="url(#arrowhead)" fill="none" />
+  
+  <!-- Фронтенд -> Бэкенд -->
+  <path d="M300 450 L350 450 L350 240 L300 240" stroke="#495057" stroke-width="2" marker-end="url(#arrowhead)" fill="none" />
+  
+  <!-- Определение маркеров для стрелок -->
+  <defs>
+    <marker id="arrowhead" markerWidth="5" markerHeight="3.5" refX="5" refY="1.75" orient="auto">
+      <polygon points="0 0, 5 1.75, 0 3.5" fill="#495057" />
+    </marker>
+  </defs>
+  
+  <!-- Контур для пользователя -->
+  <circle cx="40" cy="450" r="20" fill="#ff922b" stroke="#e67700" stroke-width="2" />
+  <text x="40" y="455" font-family="Arial" font-size="12" text-anchor="middle" fill="#fff">User</text>
+  
+  <!-- Пользователь -> Фронтенд -->
+  <path d="M60 450 L100 450" stroke="#495057" stroke-width="2" marker-end="url(#arrowhead)" fill="none" />
+  
+  <!-- Легенда -->
+  <rect x="100" y="550" width="600" height="30" rx="3" ry="3" fill="#e9ecef" stroke="#ced4da" stroke-width="1" />
+  <text x="400" y="570" font-family="Arial" font-size="12" text-anchor="middle" fill="#495057">RAG Система - индексация документов и генерация ответов на основе контекста</text>
+</svg> 

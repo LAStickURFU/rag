@@ -316,13 +316,30 @@ async def upload_documents(
 async def get_documents(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db),
-    all_users: bool = False
+    all_users: bool = False,
+    page: int = 0,
+    page_size: int = 100,
+    return_all: bool = False
 ):
     """
-    Получает список документов пользователя.
-    Если пользователь администратор и указан параметр all_users=True,
-    возвращает документы всех пользователей.
+    Получает список документов пользователя с поддержкой пагинации.
+    
+    - Если пользователь администратор и указан параметр all_users=True, 
+      возвращает документы всех пользователей.
+    - Поддерживает пагинацию с параметрами page и page_size.
+    - Если указан параметр return_all=True, игнорирует пагинацию и возвращает все документы,
+      что обеспечивает обратную совместимость со вспомогательными скриптами.
     """
+    # Проверяем и корректируем параметры пагинации
+    if page < 0:
+        page = 0
+    
+    # Ограничиваем размер страницы разумным значением
+    if page_size <= 0:
+        page_size = 10
+    elif page_size > 500:
+        page_size = 500
+        
     # Проверяем права на получение всех документов
     if all_users and current_user.role != "admin":
         raise HTTPException(
@@ -330,13 +347,23 @@ async def get_documents(
             detail="Недостаточно прав для просмотра документов всех пользователей"
         )
     
-    # Формируем запрос
+    # Формируем базовый запрос
     query = db.query(DocumentModel)
     if not all_users or current_user.role != "admin":
         # Для обычных пользователей или если не запрошены все документы
         query = query.filter(DocumentModel.user_id == current_user.id)
     
-    documents = query.order_by(DocumentModel.created_at.desc()).all()
+    # Получаем общее количество документов для метаданных пагинации
+    total_docs = query.count()
+    
+    # Добавляем сортировку
+    query = query.order_by(DocumentModel.created_at.desc())
+    
+    # Применяем пагинацию, если не запрошены все документы
+    if not return_all:
+        query = query.offset(page * page_size).limit(page_size)
+    
+    documents = query.all()
     
     # Преобразуем в словари для ответа
     result = []
@@ -370,7 +397,23 @@ async def get_documents(
             }
         })
     
-    return result
+    # Для обратной совместимости - если запрашиваются все документы без пагинации
+    # возвращаем просто список документов как раньше
+    if return_all:
+        return result
+    
+    # В случае использования пагинации возвращаем расширенный ответ с метаданными
+    return {
+        "items": result,
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total_docs,
+            "total_pages": (total_docs + page_size - 1) // page_size,
+            "has_next": (page + 1) * page_size < total_docs,
+            "has_prev": page > 0
+        }
+    }
 
 @router.post("/reindex")
 async def reindex_documents(

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Container,
   Typography,
@@ -6,38 +6,86 @@ import {
   Alert,
   Button,
   Snackbar,
-  FormControlLabel,
-  Switch,
   CircularProgress,
-  Paper
+  Paper,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  MenuItem,
+  Select,
+  FormControl,
+  InputLabel
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import { getDocuments, uploadDocuments, reindexDocuments, deleteDocument, clearRagIndex, deleteAllDocuments } from '../services/api';
 import FileUpload from '../components/FileUpload';
 import DocumentList from '../components/DocumentList';
+import DocumentStats from '../components/DocumentStats';
 import { useAuth } from '../contexts/AuthContext';
+import ReindexConfirmDialog from '../components/ReindexConfirmDialog';
+import api from '../services/api';
 
 function DocumentsPage() {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [reindexing, setReindexing] = useState(false);
-  const [clearing, setClearing] = useState(false);
   const [error, setError] = useState('');
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'success' });
   const [selectedIds, setSelectedIds] = useState([]);
   const [showAllDocs, setShowAllDocs] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(false);
   const { isAdmin } = useAuth();
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [confirmReindexOpen, setConfirmReindexOpen] = useState(false);
+  const [showAllUsers, setShowAllUsers] = useState(false);
+  
+  // Для отслеживания первого рендера при изменении фильтра
+  const isFirstRenderRef = useRef(true);
+  
+  // Добавляем состояние для хранения данных пагинации
+  const [pagination, setPagination] = useState({
+    page: 0,
+    page_size: 20,
+    total: 0,
+    total_pages: 0,
+    has_next: false,
+    has_prev: false
+  });
+  
+  // Проверяем, есть ли документы в процессе обработки
+  const hasProcessingDocuments = Array.isArray(documents) && documents.some(doc => 
+    ['processing', 'chunking', 'embedding', 'indexing', 'uploaded', 'reindexing'].includes(doc.status)
+  );
 
   // Преобразуем fetchDocuments в useCallback для использования в эффектах
-  const fetchDocuments = useCallback(async () => {
+  const fetchDocuments = useCallback(async (page = pagination.page) => {
+    console.log(`Запрос документов: page=${page}, showAllUsers=${showAllUsers}, режим=${refreshInterval ? 'автообновление' : 'обычный'}`);
     setError('');
     try {
-      const docs = await getDocuments(isAdmin() && showAllDocs);
-      setDocuments(docs);
-      return docs;
+      // В режиме автообновления всегда запрашиваем все документы без пагинации
+      // Если документы в процессе обработки, также запрашиваем все
+      const useReturnAll = refreshInterval;
+      
+      const response = await getDocuments(
+        isAdmin() && showAllUsers,
+        useReturnAll ? 0 : page, 
+        pagination.page_size,
+        useReturnAll // returnAll=true для автообновления
+      );
+      
+      if (useReturnAll) {
+        // Старый формат ответа - просто массив документов
+        setDocuments(response);
+        return response;
+      } else {
+        // Новый формат ответа с пагинацией
+        setDocuments(response.items);
+        setPagination(response.pagination);
+        return response.items;
+      }
     } catch (err) {
       setError('Не удалось загрузить список документов');
       console.error(err);
@@ -45,23 +93,52 @@ function DocumentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [isAdmin, showAllDocs]);
+  }, [isAdmin, showAllUsers, refreshInterval, pagination.page_size, pagination.page]);
 
-  // Отдельный эффект для автоматического обновления при загрузке страницы
+  // Отдельный эффект для только одной цели - начальной загрузки страницы
   useEffect(() => {
-    // При первой загрузке получаем документы
+    console.log('Первоначальная загрузка документов');
     setLoading(true);
     fetchDocuments();
-  }, [fetchDocuments]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Преднамеренно пустой массив зависимостей
 
-  // Отдельный эффект для интервального обновления
+  // Обработчик изменения страницы пагинации
+  const handlePageChange = (newPage) => {
+    console.log(`Изменена страница пагинации на ${newPage}`);
+    // Обновляем страницу и загружаем документы для этой страницы
+    setPagination(prev => ({ ...prev, page: newPage }));
+    setLoading(true);
+    fetchDocuments(newPage);
+  };
+
+  // Эффект для отслеживания изменения фильтра showAllUsers
   useEffect(() => {
+    // Не запускаем при первом рендере
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false;
+      return;
+    }
+    
+    console.log('Изменился фильтр showAllUsers, запрашиваем документы');
+    setLoading(true);
+    fetchDocuments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAllUsers]); // Только showAllUsers как зависимость
+
+  // Эффект для интервального обновления
+  useEffect(() => {
+    // Пропускаем, если нет необходимости в автообновлении
+    if (!hasProcessingDocuments && !refreshInterval) {
+      return;
+    }
+    
     console.log("Настройка интервального обновления документов");
     
     // Создаем интервал для автоматического обновления каждые 2 секунды
     const autoRefreshInterval = setInterval(() => {
       // Проверяем, есть ли документы в обработке
-      const hasProcessingDocs = documents.some(doc => 
+      const hasProcessingDocs = Array.isArray(documents) && documents.some(doc => 
         ['processing', 'chunking', 'embedding', 'indexing', 'uploaded', 'reindexing'].includes(doc.status)
       );
       
@@ -100,7 +177,8 @@ function DocumentsPage() {
       console.log("Очистка интервала обновления документов");
       clearInterval(autoRefreshInterval);
     };
-  }, [documents, refreshInterval, fetchDocuments]); // documents изменяется при каждом fetchDocuments
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasProcessingDocuments, refreshInterval, documents]); // Только необходимые зависимости
 
   // Загрузка нового документа
   const handleUploadDocument = async (titles, files) => {
@@ -129,18 +207,15 @@ function DocumentsPage() {
     }
   };
 
-  // Проверяем, есть ли документы в процессе обработки
-  const hasProcessingDocuments = documents.some(doc => 
-    ['processing', 'chunking', 'embedding', 'indexing', 'uploaded', 'reindexing'].includes(doc.status)
-  );
-
   // Переиндексация документов
-  const handleReindexDocuments = async () => {
+  const handleReindexDocuments = async (includeAllUsers = false) => {
     setReindexing(true);
     setError('');
    
     try {
-      const result = await reindexDocuments(isAdmin() && showAllDocs);
+      // Переиндексируем только документы всех пользователей, если пользователь админ и выбран соответствующий параметр
+      const reindexAllUsers = isAdmin() && includeAllUsers;
+      const result = await reindexDocuments(reindexAllUsers);
       console.log('Запущена переиндексация документов:', result);
       
       setNotification({
@@ -176,7 +251,7 @@ function DocumentsPage() {
       return;
     }
 
-    setClearing(true);
+    setLoading(true);
     setError('');
    
     try {
@@ -195,7 +270,7 @@ function DocumentsPage() {
         severity: 'error'
       });
     } finally {
-      setClearing(false);
+      setLoading(false);
     }
   };
 
@@ -205,7 +280,7 @@ function DocumentsPage() {
       return;
     }
 
-    setClearing(true);
+    setLoading(true);
     setError('');
    
     try {
@@ -225,7 +300,7 @@ function DocumentsPage() {
         severity: 'error'
       });
     } finally {
-      setClearing(false);
+      setLoading(false);
     }
   };
 
@@ -242,17 +317,12 @@ function DocumentsPage() {
     }
   };
 
-  // Закрытие уведомления
-  const handleCloseNotification = () => {
-    setNotification({ ...notification, open: false });
-  };
-
   // Массовый выбор чекбоксов
   const handleSelect = (id, checked) => {
     setSelectedIds(prev => checked ? [...prev, id] : prev.filter(x => x !== id));
   };
   const handleSelectAll = (checked) => {
-    setSelectedIds(checked ? documents.map(d => d.id) : []);
+    setSelectedIds(checked && Array.isArray(documents) ? documents.map(d => d.id) : []);
   };
   // Массовое удаление
   const handleDeleteSelected = async () => {
@@ -274,74 +344,103 @@ function DocumentsPage() {
     setShowAllDocs(event.target.checked);
   };
 
-  // Ручное обновление списка документов
-  const handleRefreshDocuments = async () => {
-    setLoading(true);
-    await fetchDocuments();
+  // Обновляем обработчик ручного обновления списка документов
+  const handleRefresh = async () => {
+    console.log('Ручное обновление списка документов');
+    // Предотвращаем повторное нажатие во время загрузки
+    if (!loading) {
+      setLoading(true);
+      await fetchDocuments();
+    }
+  };
+
+  // Обновляем обработчик изменения выбора в выпадающем списке
+  const handleShowAllUsersChange = (e) => {
+    console.log('Выбран новый режим показа документов:', e.target.value);
+    setShowAllUsers(e.target.value);
+    // Обновление документов будет выполнено эффектом выше
   };
 
   return (
     <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h4" component="h1">
-          Управление документами
-        </Typography>
-        
-        <Box>
+      <Typography variant="h4" component="h1" gutterBottom>
+        Управление документами
+      </Typography>
+      
+      {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
+      
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', mb: 3 }}>
+        <Box sx={{ display: 'flex', gap: 2 }}>
           {isAdmin() && (
-            <Button
-              variant="outlined"
-              color="secondary"
-              onClick={handleDeleteAllDocuments}
-              disabled={clearing || hasProcessingDocuments}
-              sx={{ mr: 2 }}
-            >
-              Удалить все документы
-            </Button>
+            <FormControl variant="outlined" size="small" sx={{ minWidth: 200 }}>
+              <InputLabel id="show-all-users-label">Показать документы</InputLabel>
+              <Select
+                labelId="show-all-users-label"
+                value={showAllUsers}
+                onChange={handleShowAllUsersChange}
+                label="Показать документы"
+              >
+                <MenuItem value={false}>Только мои</MenuItem>
+                <MenuItem value={true}>Всех пользователей</MenuItem>
+              </Select>
+            </FormControl>
           )}
-          <Button
-            variant="outlined"
-            color="error"
-            startIcon={<DeleteSweepIcon />}
-            onClick={handleClearIndex}
-            disabled={clearing || hasProcessingDocuments}
-            sx={{ mr: 2 }}
-          >
-            Очистить индекс
-          </Button>
-          <Button
-            variant="outlined"
-            color="primary"
-            startIcon={<RefreshIcon />}
-            onClick={handleReindexDocuments}
-            disabled={reindexing || hasProcessingDocuments}
-          >
-            Переиндексировать
-          </Button>
+          
+          <Box sx={{ display: 'flex', gap: 1, ml: isAdmin() ? 2 : 0 }}>
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={handleRefresh}
+              disabled={loading}
+              size="medium"
+            >
+              ОБНОВИТЬ
+            </Button>
+            
+            <Button
+              variant="contained"
+              color="secondary"
+              onClick={() => setConfirmReindexOpen(true)}
+              disabled={loading}
+              size="medium"
+            >
+              ПЕРЕИНДЕКСИРОВАТЬ
+            </Button>
+            
+            {isAdmin() && (
+              <Button
+                variant="contained"
+                color="warning"
+                onClick={handleClearIndex}
+                disabled={loading}
+                size="medium"
+              >
+                ОЧИСТИТЬ ИНДЕКС
+              </Button>
+            )}
+            
+            {isAdmin() && (
+              <Button
+                variant="contained"
+                color="error"
+                onClick={handleDeleteAllDocuments}
+                disabled={loading}
+                size="medium"
+              >
+                УДАЛИТЬ ВСЕ ДОКУМЕНТЫ
+              </Button>
+            )}
+          </Box>
         </Box>
       </Box>
       
-      {isAdmin() && (
-        <Box sx={{ mb: 2 }}>
-          <FormControlLabel
-            control={
-              <Switch 
-                checked={showAllDocs} 
-                onChange={toggleShowAllDocs}
-                color="primary"
-              />
-            }
-            label="Показать документы всех пользователей"
-          />
-        </Box>
-      )}
+      {/* Добавляем компонент статистики */}
+      <DocumentStats documentStats={documents} loading={loading} />
       
       <Typography variant="body1" paragraph>
         Загружайте документы для использования в RAG-системе.
         Поддерживаются текстовые файлы, которые будут проиндексированы для поиска.
       </Typography>
-      
-      {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
       
       {/* Отображение прогресса автоматического обновления */}
       {hasProcessingDocuments && refreshInterval && (
@@ -353,7 +452,7 @@ function DocumentsPage() {
           <Button 
             variant="text" 
             color="primary"
-            onClick={handleRefreshDocuments}
+            onClick={handleRefresh}
             startIcon={<RefreshIcon />}
           >
             Обновить
@@ -377,15 +476,51 @@ function DocumentsPage() {
         onSelect={handleSelect}
         onSelectAll={handleSelectAll}
         onDeleteSelected={handleDeleteSelected}
-        showOwner={isAdmin()}
+        showOwner={isAdmin() && showAllUsers}
+        pagination={!refreshInterval && !hasProcessingDocuments && Array.isArray(documents) && documents.length > 0 ? pagination : null}
+        onPageChange={handlePageChange}
+      />
+      
+      {/* Диалоги подтверждения */}
+      <Dialog
+        open={confirmDeleteOpen}
+        onClose={() => setConfirmDeleteOpen(false)}
+      >
+        <DialogTitle>Подтверждение удаления</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Вы действительно хотите удалить {selectedIds.length > 1 
+              ? `выбранные ${selectedIds.length} документов` 
+              : 'выбранный документ'}?
+            Эта операция не может быть отменена.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDeleteOpen(false)}>Отмена</Button>
+          <Button onClick={() => {
+            handleDeleteSelected();
+            setConfirmDeleteOpen(false);
+          }} color="error">Удалить</Button>
+        </DialogActions>
+      </Dialog>
+      
+      <ReindexConfirmDialog
+        open={confirmReindexOpen}
+        onClose={() => setConfirmReindexOpen(false)}
+        onConfirm={handleReindexDocuments}
+        showAllUsersOption={isAdmin()}
+        allUsersSelected={showAllUsers}
       />
       
       <Snackbar
         open={notification.open}
         autoHideDuration={6000}
-        onClose={handleCloseNotification}
-        message={notification.message}
-      />
+        onClose={() => setNotification({ ...notification, open: false })}
+      >
+        <Alert onClose={() => setNotification({ ...notification, open: false })} severity={notification.severity || 'info'}>
+          {notification.message}
+        </Alert>
+      </Snackbar>
     </Container>
   );
 }

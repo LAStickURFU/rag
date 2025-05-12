@@ -28,10 +28,10 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
 
 # Настройки RAG
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-large")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
 CROSS_ENCODER_MODEL = os.getenv("CROSS_ENCODER_MODEL", "cross-encoder/ms-marco-MiniLM-L-12-v2")
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "400"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "64"))
 TOP_K_CHUNKS = int(os.getenv("TOP_K_CHUNKS", "7"))
 USE_HYBRID_SEARCH = os.getenv("USE_HYBRID_SEARCH", "true").lower() == "true"
 USE_RERANKER = os.getenv("USE_RERANKER", "true").lower() == "true"
@@ -57,7 +57,7 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 
 # Настройки токенового чанкера
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "512"))
-OVERLAP_TOKENS = int(os.getenv("OVERLAP_TOKENS", "20"))
+OVERLAP_TOKENS = int(os.getenv("OVERLAP_TOKENS", "64"))
 USE_TOKEN_CHUNKER = os.getenv("USE_TOKEN_CHUNKER", "false").lower() == "true"
 TOKEN_MODEL = os.getenv("TOKEN_MODEL", "mistralai/Mistral-7B-Instruct-v0.2")
 
@@ -86,25 +86,25 @@ class RagConfig:
     
     def __init__(self):
         """Инициализация конфигурации RAG."""
-        self.model_name = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-large")
+        self.model_name = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
         self.collection_name = os.getenv("QDRANT_COLLECTION", "documents")
         self.use_hybrid = os.getenv("USE_HYBRID_SEARCH", "true").lower() == "true"
         self.use_reranker = os.getenv("USE_RERANKER", "true").lower() == "true"
         self.use_adaptive_k = os.getenv("USE_ADAPTIVE_K", "true").lower() == "true"
-        self.dense_weight = float(os.getenv("DENSE_WEIGHT", "0.7"))
-        self.sparse_weight = float(os.getenv("SPARSE_WEIGHT", "0.3"))
-        self.reranker_weight = float(os.getenv("RERANKER_WEIGHT", "0.5"))
+        self.dense_weight = float(os.getenv("DENSE_WEIGHT", "0.6"))
+        self.sparse_weight = float(os.getenv("SPARSE_WEIGHT", "0.4"))
+        self.reranker_weight = float(os.getenv("RERANKER_WEIGHT", "0.6"))
         self.max_context_docs = int(os.getenv("MAX_CONTEXT_DOCS", "5"))
         self.top_k_chunks = int(os.getenv("TOP_K_CHUNKS", "7"))
         
         # Параметры символьного чанкера (для обратной совместимости)
-        self.chunk_size = int(os.getenv("CHUNK_SIZE", "400"))
-        self.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", "200"))
+        self.chunk_size = int(os.getenv("CHUNK_SIZE", "512"))
+        self.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", "64"))
         
         # Параметры токенового чанкера
         self.use_token_chunker = os.getenv("USE_TOKEN_CHUNKER", "false").lower() == "true"
         self.max_tokens = int(os.getenv("MAX_TOKENS", "512"))
-        self.overlap_tokens = int(os.getenv("OVERLAP_TOKENS", "20"))
+        self.overlap_tokens = int(os.getenv("OVERLAP_TOKENS", "64"))
         self.token_model_name = os.getenv("TOKEN_MODEL", "mistralai/Mistral-7B-Instruct-v0.2")
         
         # Параметры языка
@@ -121,6 +121,9 @@ class RagConfig:
         self.heading_patterns = os.getenv("HEADING_PATTERNS", "").split('|') if os.getenv("HEADING_PATTERNS") else None
         self.min_chunk_size = int(os.getenv("MIN_CHUNK_SIZE", "50"))
         self.max_chunk_size = int(os.getenv("MAX_CHUNK_SIZE", "1000"))
+        
+        # Параметры для пакетной обработки
+        self.batch_size = int(os.getenv("BATCH_SIZE", "64"))
 
 @lru_cache()
 def get_config() -> Dict[str, Any]:

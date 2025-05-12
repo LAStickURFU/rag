@@ -174,9 +174,19 @@ export const resetUserPassword = async (username, newPassword) => {
 };
 
 // Получение списка документов
-export const getDocuments = async (allUsers = false) => {
+export const getDocuments = async (allUsers = false, page = 0, pageSize = 100, returnAll = false) => {
   try {
-    const response = await api.get(`/documents${allUsers ? '?all_users=true' : ''}`);
+    let url = '/documents?';
+    const params = [];
+    
+    if (allUsers) params.push('all_users=true');
+    if (page > 0) params.push(`page=${page}`);
+    if (pageSize !== 100) params.push(`page_size=${pageSize}`);
+    if (returnAll) params.push('return_all=true');
+    
+    url += params.join('&');
+    
+    const response = await api.get(url);
     return response.data;
   } catch (error) {
     throw error.response ? error.response.data : new Error('Ошибка при получении списка документов');
